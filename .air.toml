@@ -1,9 +1,9 @@
-# .air.conf
+# .air.toml
 root = "."
 tmp_dir = "tmp"
 
 [build]
-  # Build your main package from the cmd/ByteBucket directory.
+  # Build the main binary from the cmd/ByteBucket directory
   cmd = "go build -o tmp/main ./cmd/ByteBucket"
   include_ext = ["go"]
   exclude_dir = ["tmp", "vendor"]
