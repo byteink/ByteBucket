@@ -31,7 +31,7 @@ func NewRouter() *gin.Engine {
 			objects := buckets.Group("/:bucketName/objects")
 			{
 				objects.POST("/", handlers.UploadObjectHandler)
-				objects.GET("/", handlers.ListObjectsHandler)
+				objects.GET("", handlers.ListObjectsHandler) // Changed from "/" to ""
 				// Use a wildcard to support nested paths in object keys.
 				objects.GET("/*objectKey", handlers.DownloadObjectHandler)
 				objects.DELETE("/*objectKey", handlers.DeleteObjectHandler)
