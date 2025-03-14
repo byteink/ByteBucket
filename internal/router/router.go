@@ -3,60 +3,47 @@ package router
 import (
 	"ByteBucket/internal/auth"
 	"ByteBucket/internal/handlers"
-
 	"github.com/gin-gonic/gin"
 )
 
-// NewRouter sets up Gin routes and middleware.
+// NewRouter sets up Gin routes and middleware in a S3 API compatible manner.
+// This refactoring aligns the endpoints with the S3 REST API conventions.
 func NewRouter() *gin.Engine {
-	r := gin.Default()
+	// Create a new Gin engine without the default logger to allow custom middleware
+	r := gin.New()
 
-	r.GET("/", handlers.HomeHandler)
+	// Attach recovery middleware to handle panics gracefully
+	r.Use(gin.Recovery())
 
-	// Public health check endpoint.
+	// Public health check endpoint remains available without authentication
 	r.GET("/health", handlers.HealthHandler)
 
-	// Authenticated routes.
-	authGroup := r.Group("/")
-	authGroup.Use(auth.AuthMiddleware)
-	{
-		// Bucket endpoints.
-		buckets := authGroup.Group("/buckets")
-		{
-			buckets.POST("/", handlers.CreateBucketHandler)
-			buckets.GET("/", handlers.ListBucketsHandler)
-			buckets.DELETE("/:bucketName", handlers.DeleteBucketHandler)
+	// All S3 operations require authentication (using S3 signature-based auth middleware)
+	r.Use(auth.AuthMiddleware)
 
-			// Object endpoints.
-			objects := buckets.Group("/:bucketName/objects")
-			{
-				objects.POST("/", handlers.UploadObjectHandler)
-				objects.GET("", handlers.ListObjectsHandler) // Changed from "/" to ""
-				// Use a wildcard to support nested paths in object keys.
-				objects.GET("/*objectKey", handlers.DownloadObjectHandler)
-				objects.DELETE("/*objectKey", handlers.DeleteObjectHandler)
-			}
-		}
+	// S3 API: List Buckets
+	// GET / returns a list of all buckets
+	r.GET("/", handlers.ListBucketsHandler)
 
-		// Presigned URL endpoints.
-		presign := authGroup.Group("/presign")
-		{
-			presign.GET("/upload", handlers.PresignUploadHandler)
-			presign.GET("/download", handlers.PresignDownloadHandler)
-		}
+	// Bucket-level operations
+	// Create Bucket: PUT /:bucket
+	r.PUT("/:bucket", handlers.CreateBucketHandler)
 
-		// User management endpoints.
-		users := authGroup.Group("/users")
-		{
-			// POST /users auto-generates keys.
-			users.POST("/", handlers.CreateUserHandler)
-			users.GET("/", handlers.ListUsersHandler)
-		}
-	}
+	// Delete Bucket: DELETE /:bucket
+	r.DELETE("/:bucket", handlers.DeleteBucketHandler)
 
-	// Public object access in S3‑style:
-	// GET /:bucket/*objectKey bypasses authentication.
-	r.GET("/:bucket/*objectKey", handlers.PublicDownloadObjectHandler)
+	// Object-level operations
+	// List Objects in a bucket: GET /:bucket (query parameters like ?list-type=2 handled in the handler)
+	r.GET("/:bucket", handlers.ListObjectsHandler)
+
+	// Upload Object: PUT /:bucket/*objectKey
+	r.PUT("/:bucket/*objectKey", handlers.UploadObjectHandler)
+
+	// Download Object: GET /:bucket/*objectKey
+	r.GET("/:bucket/*objectKey", handlers.DownloadObjectHandler)
+
+	// Delete Object: DELETE /:bucket/*objectKey
+	r.DELETE("/:bucket/*objectKey", handlers.DeleteObjectHandler)
 
 	return r
 }
