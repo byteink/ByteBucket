@@ -179,12 +179,16 @@ func buildCanonicalRequest(c *gin.Context, signedHeaders string, payloadHash str
 	var canonicalHeaders string
 	for _, headerName := range headersToSign {
 		headerName = strings.ToLower(headerName)
-		headerValues := c.Request.Header[http.CanonicalHeaderKey(headerName)]
-		if len(headerValues) == 0 {
-			continue
+		var value string
+		if headerName == "host" {
+			value = c.Request.Host
+		} else {
+			headerValues := c.Request.Header[http.CanonicalHeaderKey(headerName)]
+			if len(headerValues) == 0 {
+				continue
+			}
+			value = strings.TrimSpace(strings.Join(headerValues, ","))
 		}
-		// Join multiple values with a comma and trim spaces.
-		value := strings.TrimSpace(strings.Join(headerValues, ","))
 		canonicalHeaders += headerName + ":" + value + "\n"
 	}
 
