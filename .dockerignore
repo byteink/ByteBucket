@@ -43,4 +43,5 @@ go.work.sum
 
 # data directory
 data/
+tmp
 
