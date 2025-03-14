@@ -1,0 +1,18 @@
+# =========================================================
+# Base Image for Development
+# =========================================================
+
+FROM golang:1.24-alpine AS base
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+# =========================================================
+# Development Image: Install Air for Live Reloading
+# =========================================================
+
+RUN go install github.com/air-verse/air@latest
+
+EXPOSE 9000
+CMD ["air"]
