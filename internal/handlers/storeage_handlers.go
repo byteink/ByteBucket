@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -127,19 +128,14 @@ func DeleteBucketHandler(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// UploadObjectHandler handles file uploads.
+// UploadObjectHandler handles object uploads by reading the raw request body.
 func UploadObjectHandler(c *gin.Context) {
-	bucketName := c.Param("bucketName")
-	file, err := c.FormFile("file")
-	if err != nil {
-		c.XML(http.StatusBadRequest, struct {
-			XMLName xml.Name `xml:"Error"`
-			Message string   `xml:"Message"`
-		}{
-			Message: "File not provided",
-		})
-		return
-	}
+	bucketName := c.Param("bucket")
+	objectKey := c.Param("objectKey")
+	// Clean the object key (removes any redundant separators or relative paths)
+	objectKey = filepath.Clean(objectKey)
+
+	// Ensure the bucket directory exists.
 	bucketPath := filepath.Join("/data/objects", bucketName)
 	if err := os.MkdirAll(bucketPath, 0755); err != nil {
 		c.XML(http.StatusInternalServerError, struct {
@@ -150,8 +146,24 @@ func UploadObjectHandler(c *gin.Context) {
 		})
 		return
 	}
-	dstPath := filepath.Join(bucketPath, file.Filename)
-	if err := c.SaveUploadedFile(file, dstPath); err != nil {
+
+	// Determine the destination file path.
+	dstPath := filepath.Join(bucketPath, objectKey)
+	// Create or truncate the file.
+	f, err := os.Create(dstPath)
+	if err != nil {
+		c.XML(http.StatusInternalServerError, struct {
+			XMLName xml.Name `xml:"Error"`
+			Message string   `xml:"Message"`
+		}{
+			Message: "Error creating file",
+		})
+		return
+	}
+	defer f.Close()
+
+	// Copy the raw request body to the file.
+	if _, err := io.Copy(f, c.Request.Body); err != nil {
 		c.XML(http.StatusInternalServerError, struct {
 			XMLName xml.Name `xml:"Error"`
 			Message string   `xml:"Message"`
@@ -160,6 +172,7 @@ func UploadObjectHandler(c *gin.Context) {
 		})
 		return
 	}
+
 	c.Status(http.StatusNoContent)
 }
 
@@ -212,7 +225,7 @@ func ListObjectsHandler(c *gin.Context) {
 		IsTruncated bool         `xml:"IsTruncated"`
 		Contents    []ObjectInfo `xml:"Contents"`
 	}{
-		XMLNS:       "http://s3.amazonaws.com/doc/2006-03-01/",
+		XMLNS:       "https://s3.amazonaws.com/doc/2006-03-01/",
 		Name:        bucketName,
 		Prefix:      "",
 		Marker:      "",

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"log"
 	"os"
+	"sync"
 
 	"ByteBucket/internal/router"
 	"ByteBucket/internal/storage"
@@ -35,11 +36,12 @@ func main() {
 
 	storage.SetEncryptionKey(encKey)
 
-	// Initialize BoltDB at /data/meta.db.
+	// Initialize BoltDB for file metadata.
 	if err := storage.InitMetaStore("/data/meta.db"); err != nil {
 		log.Fatalf("failed to initialize metadata store: %v", err)
 	}
 
+	// Initialize BoltDB for users.
 	if err := storage.InitUserStore("/data/users.db"); err != nil {
 		log.Fatalf("Failed to initialize user store: %v", err)
 	}
@@ -63,11 +65,29 @@ func main() {
 		log.Println("User database already initialized; environment credentials discarded")
 	}
 
-	// Create the HTTP router.
-	r := router.NewRouter()
+	// Create both the storage router and admin router.
+	storageRouter := router.NewStorageRouter()
+	adminRouter := router.NewAdminRouter()
 
-	log.Println("Server listening on port 9000")
-	if err := r.Run(":9000"); err != nil {
-		log.Fatalf("server failed: %v", err)
-	}
+	// Start both servers concurrently.
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		log.Println("Storage server listening on port 9000")
+		if err := storageRouter.Run(":9000"); err != nil {
+			log.Fatalf("Storage server failed: %v", err)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		log.Println("Admin server listening on port 9001")
+		if err := adminRouter.Run(":9001"); err != nil {
+			log.Fatalf("Admin server failed: %v", err)
+		}
+	}()
+
+	wg.Wait()
 }

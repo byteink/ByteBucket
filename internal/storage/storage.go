@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"ByteBucket/internal/util"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -101,11 +102,20 @@ func Decrypt(cipherText string) (string, error) {
 	return string(plaintext), nil
 }
 
+// ACLRule represents an individual policy rule, similar to an IAM statement.
+type ACLRule struct {
+	Effect  string   `json:"effect"`  // "Allow" or "Deny"
+	Buckets []string `json:"buckets"` // e.g. ["*"] or specific bucket names
+	Actions []string `json:"actions"` // e.g. ["*"] or specific actions
+}
+
 // User represents a user record.
 type User struct {
-	AccessKeyID     string `json:"access_key_id"`
-	EncryptedSecret string `json:"encrypted_secret"`
-	ACL             string `json:"acl"`
+	AccessKeyID     string    `json:"accessKeyID"`
+	EncryptedSecret string    `json:"encryptedSecret"`
+	ACL             []ACLRule `json:"acl"` // New ACL field
+	// SecretAccessKey is only used temporarily when a user is created.
+	SecretAccessKey string `json:"-"`
 }
 
 // CreateUser stores a new user in BoltDB.
@@ -172,7 +182,7 @@ func UsersExist() (bool, error) {
 	return exist, err
 }
 
-// CreateSuperUser creates a super user with the provided credentials.
+// CreateSuperUser creates a super user with full access.
 func CreateSuperUser(accessKey, secret string) error {
 	encrypted, err := Encrypt(secret)
 	if err != nil {
@@ -181,9 +191,64 @@ func CreateSuperUser(accessKey, secret string) error {
 	user := &User{
 		AccessKeyID:     accessKey,
 		EncryptedSecret: encrypted,
-		ACL:             "super",
+		ACL: []ACLRule{
+			{
+				Effect:  "Allow",
+				Buckets: []string{"*"},
+				Actions: []string{"*"},
+			},
+		},
 	}
 	return CreateUser(user)
+}
+
+// CreateUserWithACL generates a new user with the given ACL rules.
+func CreateUserWithACL(aclRules []ACLRule) (*User, error) {
+	accessKeyID := util.GenerateRandomString(20, util.AccessKeyCharset)
+	secretAccessKey := util.GenerateRandomString(40, util.SecretAccessKeyCharset)
+	encrypted, err := Encrypt(secretAccessKey)
+	if err != nil {
+		return nil, err
+	}
+	newUser := &User{
+		AccessKeyID:     accessKeyID,
+		EncryptedSecret: encrypted,
+		ACL:             aclRules,
+		SecretAccessKey: secretAccessKey,
+	}
+	if err := CreateUser(newUser); err != nil {
+		return nil, err
+	}
+	return newUser, nil
+}
+
+// UpdateUserACL updates the ACL for a user.
+func UpdateUserACL(accessKeyID string, aclRules []ACLRule) error {
+	return userDB.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("Users"))
+		v := b.Get([]byte(accessKeyID))
+		if v == nil {
+			return fmt.Errorf("user not found")
+		}
+		var u User
+		if err := json.Unmarshal(v, &u); err != nil {
+			return err
+		}
+		u.ACL = aclRules
+		data, err := json.Marshal(u)
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(accessKeyID), data)
+	})
+}
+
+// DeleteUser deletes a user from the "Users" bucket by their accessKeyID.
+func DeleteUser(accessKeyID string) error {
+	return userDB.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("Users"))
+		return b.Delete([]byte(accessKeyID))
+	})
 }
 
 // ObjectMetadata represents object metadata (e.g., ACL).

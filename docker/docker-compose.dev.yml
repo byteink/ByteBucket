@@ -5,7 +5,8 @@ services:
       context: ..          # Set context to the project root
       dockerfile: docker/Dockerfile.dev
     ports:
-      - "9001:9000"  # Maps container port 9000 to host port 9001 for development
+      - "9000:9000"  # for storage api
+      - "9001:9001"  # for admin api
     environment:
       - ENCRYPTION_KEY=zcY9EnJ5gVVDyfrNlXsuEOToLwC7cWsiz02xGKbBo1g=
       - ACCESS_KEY_ID=APE6at7CMFvJaEJjnmbC
