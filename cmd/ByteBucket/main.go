@@ -40,6 +40,10 @@ func main() {
 		log.Fatalf("failed to initialize metadata store: %v", err)
 	}
 
+	if err := storage.InitUserStore("/data/users.db"); err != nil {
+		log.Fatalf("Failed to initialize user store: %v", err)
+	}
+
 	// Create super-user if needed.
 	exist, err := storage.UsersExist()
 	if err != nil {

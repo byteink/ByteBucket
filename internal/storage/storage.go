@@ -14,6 +14,7 @@ import (
 )
 
 var metaDB *bolt.DB
+var userDB *bolt.DB
 var encryptionKey []byte
 
 // SetEncryptionKey sets the key used for encryption/decryption.
@@ -29,13 +30,29 @@ func InitMetaStore(path string) error {
 		return err
 	}
 	return metaDB.Update(func(tx *bolt.Tx) error {
-		buckets := []string{"Buckets", "Objects", "Users"}
+		buckets := []string{"Buckets", "Objects"}
 		for _, name := range buckets {
 			if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
 				return err
 			}
 		}
-		log.Println("Metadata store initialized")
+		log.Println("File metadata store initialized")
+		return nil
+	})
+}
+
+// InitUserStore initializes BoltDB for user data and creates the required "Users" bucket.
+func InitUserStore(path string) error {
+	var err error
+	userDB, err = bolt.Open(path, 0600, nil)
+	if err != nil {
+		return err
+	}
+	return userDB.Update(func(tx *bolt.Tx) error {
+		if _, err := tx.CreateBucketIfNotExists([]byte("Users")); err != nil {
+			return err
+		}
+		log.Println("User store initialized")
 		return nil
 	})
 }
@@ -93,7 +110,7 @@ type User struct {
 
 // CreateUser stores a new user in BoltDB.
 func CreateUser(user *User) error {
-	return metaDB.Update(func(tx *bolt.Tx) error {
+	return userDB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("Users"))
 		if b.Get([]byte(user.AccessKeyID)) != nil {
 			return fmt.Errorf("user already exists")
@@ -109,7 +126,7 @@ func CreateUser(user *User) error {
 // GetUser retrieves a user by access key.
 func GetUser(accessKey string) (*User, error) {
 	var user User
-	err := metaDB.View(func(tx *bolt.Tx) error {
+	err := userDB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("Users"))
 		v := b.Get([]byte(accessKey))
 		if v == nil {
@@ -126,7 +143,7 @@ func GetUser(accessKey string) (*User, error) {
 // ListUsers returns all users.
 func ListUsers() ([]User, error) {
 	var users []User
-	err := metaDB.View(func(tx *bolt.Tx) error {
+	err := userDB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("Users"))
 		return b.ForEach(func(k, v []byte) error {
 			var u User
@@ -143,7 +160,7 @@ func ListUsers() ([]User, error) {
 // UsersExist checks if any user exists.
 func UsersExist() (bool, error) {
 	exist := false
-	err := metaDB.View(func(tx *bolt.Tx) error {
+	err := userDB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("Users"))
 		c := b.Cursor()
 		k, _ := c.First()
