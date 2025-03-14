@@ -27,6 +27,7 @@ go.work.sum
 
 # data directory
 data/
+tmp
 
 # IDEs and editors
 /.idea

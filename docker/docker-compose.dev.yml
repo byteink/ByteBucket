@@ -13,7 +13,6 @@ services:
     volumes:
       - ..:/app       # Mount the entire project root into /app for live reloading
       - ../data:/data
-    # Example "develop:" block for extended tooling (not natively supported by docker-compose)
     develop:
       watch:
         - action: sync
