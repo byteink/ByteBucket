@@ -225,7 +225,10 @@ func processHeaderAuth(c *gin.Context, authHeader string) {
 }
 
 func isUserAllowed(user *storage.User, method, bucket string) bool {
-	action := getActionFromMethod(method)
+	action := getActionFromMethod(method, bucket)
+	if action == "" {
+		return false
+	}
 	for _, rule := range user.ACL {
 		if strings.EqualFold(rule.Effect, "Allow") {
 			if isBucketAllowed(rule.Buckets, bucket) && isActionAllowed(rule.Actions, action) {
@@ -236,9 +239,12 @@ func isUserAllowed(user *storage.User, method, bucket string) bool {
 	return false
 }
 
-func getActionFromMethod(method string) string {
+func getActionFromMethod(method, bucket string) string {
 	switch method {
 	case http.MethodGet:
+		if bucket == "" {
+			return "s3:ListBuckets"
+		}
 		return "s3:GetObject"
 	case http.MethodPut:
 		return "s3:PutObject"

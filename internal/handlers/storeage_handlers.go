@@ -65,7 +65,7 @@ func ListBucketsHandler(c *gin.Context) {
 			XMLName xml.Name `xml:"Error"`
 			Message string   `xml:"Message"`
 		}{
-			Message: "Error listing buckets",
+			Message: fmt.Sprintf("Error listing buckets: %v", err),
 		})
 		return
 	}
@@ -79,7 +79,13 @@ func ListBucketsHandler(c *gin.Context) {
 		if entry.IsDir() {
 			info, err := entry.Info()
 			if err != nil {
-				continue
+				c.XML(http.StatusInternalServerError, struct {
+					XMLName xml.Name `xml:"Error"`
+					Message string   `xml:"Message"`
+				}{
+					Message: fmt.Sprintf("Error getting info for bucket %s: %v", entry.Name(), err),
+				})
+				return
 			}
 			buckets = append(buckets, Bucket{
 				Name:         entry.Name(),
@@ -114,8 +120,28 @@ func ListBucketsHandler(c *gin.Context) {
 
 // DeleteBucketHandler deletes a bucket.
 func DeleteBucketHandler(c *gin.Context) {
-	bucketName := c.Param("bucketName")
+	bucketName := c.Param("bucket")
+	if bucketName == "" {
+		c.XML(http.StatusBadRequest, struct {
+			XMLName xml.Name `xml:"Error"`
+			Message string   `xml:"Message"`
+		}{
+			Message: "Bucket name required",
+		})
+		return
+	}
+
 	bucketPath := filepath.Join("/data/objects", bucketName)
+	if bucketPath == "/data/objects" {
+		c.XML(http.StatusBadRequest, struct {
+			XMLName xml.Name `xml:"Error"`
+			Message string   `xml:"Message"`
+		}{
+			Message: "Cannot delete base directory",
+		})
+		return
+	}
+
 	if err := os.RemoveAll(bucketPath); err != nil {
 		c.XML(http.StatusInternalServerError, struct {
 			XMLName xml.Name `xml:"Error"`
@@ -125,6 +151,7 @@ func DeleteBucketHandler(c *gin.Context) {
 		})
 		return
 	}
+
 	c.Status(http.StatusNoContent)
 }
 

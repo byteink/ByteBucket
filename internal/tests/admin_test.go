@@ -58,6 +58,11 @@ func createRestrictedUser(t *testing.T) (string, string) {
 				"buckets": []string{"bucketA"},
 				"actions": []string{"*"},
 			},
+			{
+				"effect":  "Allow",
+				"buckets": []string{"*"},
+				"actions": []string{"s3:ListBuckets"},
+			},
 		},
 	}
 
@@ -212,5 +217,36 @@ func TestAdminAndUserAccess(t *testing.T) {
 	testS3Operations(t, userClient, "bucketB", "test.txt", "User denied content", false)
 
 	// Step 5: Delete the restricted user.
+	deleteUser(t, userAccessKey)
+}
+
+// TestUserPermissions checks if a user is allowed to perform specific actions based on their ACL.
+func TestUserPermissions(t *testing.T) {
+	// Step 1: Create a restricted user with access to bucketA only.
+	userAccessKey, userSecretKey := createRestrictedUser(t)
+	userClient := createS3Client(userAccessKey, userSecretKey)
+
+	// Step 2: Test restricted user on allowed bucket (bucketA) – expected to succeed.
+	testS3Operations(t, userClient, "bucketA", "test-allowed.txt", "User allowed content", true)
+
+	// Step 3: Test restricted user on denied bucket (bucketB) – expected to fail.
+	testS3Operations(t, userClient, "bucketB", "test-denied.txt", "User denied content", false)
+
+	// Step 4: Test listing buckets – expected to succeed.
+	t.Log("Listing buckets")
+	output, err := userClient.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
+	if err != nil {
+		t.Fatalf("Failed to list buckets: %v", err)
+	}
+	t.Logf("Buckets: %v", output.Buckets)
+
+	// Step 5: Test restricted user trying to delete a bucket they don't have access to – expected to fail.
+	t.Log("Attempting to delete bucketB")
+	_, err = userClient.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{Bucket: aws.String("bucketB")})
+	if err == nil {
+		t.Fatalf("Expected failure but succeeded in deleting bucket: bucketB")
+	}
+
+	// Step 6: Delete the restricted user.
 	deleteUser(t, userAccessKey)
 }
