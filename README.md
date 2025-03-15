@@ -1,7 +1,7 @@
 # ByteBucket
 
 ## Description
-ByteBucket is a self-hosted, fully S3-compatible object storage system built in Go using the Gin framework. It supports standard S3 operations (uploading, downloading, deleting, and listing objects), as well as bucket management. Metadata is stored in BoltDB, and user credentials (Access Key ID and Secret Access Key) are encrypted. ByteBucket is dockerized with separate configurations for production and development.
+ByteBucket is a self-hosted, fully S3-compatible object storage system built in Go using the Gin framework. It supports standard S3 operations (uploading, downloading, deleting, and listing objects), as well as bucket management. User credentials (Access Key ID and Secret Access Key) are encrypted, and object metadata is stored alongside each file as JSON metadata files. ByteBucket is dockerized with separate configurations for production and development.
 
 ---
 
@@ -27,7 +27,7 @@ ByteBucket is a self-hosted, fully S3-compatible object storage system built in 
 - **S3 Compatibility:** Supports standard S3 operations (PUT, GET, DELETE, HEAD, LIST).
 - **Authentication:** Secure HMAC-SHA256 (AWS Signature v4 compatible).
 - **Presigned URLs:** Generate secure, time-limited URLs for object access.
-- **Persistent Metadata:** Stores bucket, object, and user metadata in BoltDB.
+- **Object Metadata:** Stored alongside objects as JSON metadata files.
 - **Dockerized:** Separate Dockerfiles for production and development environments.
 - **Live Reloading:** Automatic reload with Air in development mode.
 - **Admin API:** Manage users and access controls via an authenticated RESTful API.
@@ -173,5 +173,5 @@ Contributions are welcome! Fork the repository, implement changes, and submit a 
 ---
 
 ## License
-Licensed under the [MIT License](LICENSE).
+Licensed under the [Server Side Public License](https://www.mongodb.com/licensing/server-side-public-license), allowing free use for open-source and commercial products but prohibiting offering the software itself as a managed, paid service without open-sourcing the complete service stack.
 
