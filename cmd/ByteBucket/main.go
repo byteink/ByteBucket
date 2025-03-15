@@ -10,7 +10,25 @@ import (
 	"ByteBucket/internal/storage"
 )
 
+// ensureDirectoriesExist checks and creates required directories at startup.
+func ensureDirectoriesExist() {
+	requiredDirs := []string{"/data", "/data/objects"}
+
+	for _, dir := range requiredDirs {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			log.Printf("Directory %s not found, creating...", dir)
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				log.Fatalf("Failed to create directory %s: %v", dir, err)
+			}
+		}
+	}
+	log.Println("Required directories are present.")
+}
+
 func main() {
+	// Ensure required directories exist before anything else
+	ensureDirectoriesExist()
+
 	// Load the encryption key from the environment.
 	encKeyStr := os.Getenv("ENCRYPTION_KEY")
 	if encKeyStr == "" {
@@ -36,11 +54,6 @@ func main() {
 
 	storage.SetEncryptionKey(encKey)
 
-	// Initialize BoltDB for file metadata.
-	if err := storage.InitMetaStore("/data/meta.db"); err != nil {
-		log.Fatalf("failed to initialize metadata store: %v", err)
-	}
-
 	// Initialize BoltDB for users.
 	if err := storage.InitUserStore("/data/users.db"); err != nil {
 		log.Fatalf("Failed to initialize user store: %v", err)
@@ -49,7 +62,7 @@ func main() {
 	// Create super-user if needed.
 	exist, err := storage.UsersExist()
 	if err != nil {
-		log.Fatalf("failed to check users: %v", err)
+		log.Fatalf("Failed to check users: %v", err)
 	}
 	envAccessKey := os.Getenv("ACCESS_KEY_ID")
 	envSecret := os.Getenv("SECRET_ACCESS_KEY")
@@ -58,7 +71,7 @@ func main() {
 			log.Fatal("No users in DB and ACCESS_KEY_ID/SECRET_ACCESS_KEY not provided")
 		}
 		if err := storage.CreateSuperUser(envAccessKey, envSecret); err != nil {
-			log.Fatalf("failed to create super user: %v", err)
+			log.Fatalf("Failed to create super user: %v", err)
 		}
 		log.Println("Super user created from environment variables")
 	} else {
@@ -69,29 +82,36 @@ func main() {
 	storageRouter := router.NewStorageRouter()
 	adminRouter := router.NewAdminRouter()
 
-	// Start both servers concurrently.
+	// Channel to signal when both servers are ready
+	serverReady := make(chan bool, 2)
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	// Start Storage Server
 	go func() {
 		defer wg.Done()
 		log.Println("Storage server listening on port 9000")
+		serverReady <- true // Signal that this server has started
 		if err := storageRouter.Run(":9000"); err != nil {
 			log.Fatalf("Storage server failed: %v", err)
 		}
 	}()
 
+	// Start Admin Server
 	go func() {
 		defer wg.Done()
 		log.Println("Admin server listening on port 9001")
+		serverReady <- true // Signal that this server has started
 		if err := adminRouter.Run(":9001"); err != nil {
 			log.Fatalf("Admin server failed: %v", err)
 		}
 	}()
 
-	// log something to know that the server is running
-
-	log.Println("Server started successfully")
+	// Wait for both servers to signal they have started
+	<-serverReady
+	<-serverReady
+	log.Println("Server started successfully") // Log only after both servers are up
 
 	wg.Wait()
 }

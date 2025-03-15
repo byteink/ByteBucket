@@ -10,42 +10,54 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"strings"
 
 	"github.com/boltdb/bolt"
 )
 
-var metaDB *bolt.DB
 var userDB *bolt.DB
 var encryptionKey []byte
+
+// Detect if running inside Docker
+func isRunningInDocker() bool {
+	content, err := os.ReadFile("/proc/1/cgroup")
+	if err != nil {
+		return false // Assume not in Docker if we can't read the file
+	}
+	return strings.Contains(string(content), "docker") || strings.Contains(string(content), "containerd")
+}
+
+// Get the correct storage path based on environment
+func getStoragePath(fileName string) string {
+	if isRunningInDocker() {
+		return "/data/" + fileName
+	}
+	return "./data/" + fileName
+}
+
+// Ensure the data directory exists
+func ensureDataDirExists(path string) error {
+	dir := path[:strings.LastIndex(path, "/")]
+	return os.MkdirAll(dir, 0755)
+}
 
 // SetEncryptionKey sets the key used for encryption/decryption.
 func SetEncryptionKey(key []byte) {
 	encryptionKey = key
 }
 
-// InitMetaStore initializes BoltDB and creates required buckets.
-func InitMetaStore(path string) error {
-	var err error
-	metaDB, err = bolt.Open(path, 0600, nil)
-	if err != nil {
+// InitUserStore initializes BoltDB for user data.
+func InitUserStore(fileName string) error {
+	dbPath := getStoragePath(fileName)
+
+	// Ensure directory exists
+	if err := ensureDataDirExists(dbPath); err != nil {
 		return err
 	}
-	return metaDB.Update(func(tx *bolt.Tx) error {
-		buckets := []string{"Buckets", "Objects"}
-		for _, name := range buckets {
-			if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
-				return err
-			}
-		}
-		log.Println("File metadata store initialized")
-		return nil
-	})
-}
 
-// InitUserStore initializes BoltDB for user data and creates the required "Users" bucket.
-func InitUserStore(path string) error {
 	var err error
-	userDB, err = bolt.Open(path, 0600, nil)
+	userDB, err = bolt.Open(dbPath, 0600, nil)
 	if err != nil {
 		return err
 	}
@@ -53,7 +65,7 @@ func InitUserStore(path string) error {
 		if _, err := tx.CreateBucketIfNotExists([]byte("Users")); err != nil {
 			return err
 		}
-		log.Println("User store initialized")
+		log.Println("User store initialized at", dbPath)
 		return nil
 	})
 }
