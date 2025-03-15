@@ -487,7 +487,12 @@ func TestGetObjectMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to retrieve object: %v", err)
 	}
-	defer getResp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			t.Fatalf("Failed to close object body: %v", err)
+		}
+	}(getResp.Body)
 
 	if !reflect.DeepEqual(getResp.Metadata, expectedMetadata) {
 		t.Fatalf("GetObject metadata mismatch. Expected: %v, Got: %v", expectedMetadata, getResp.Metadata)

@@ -239,7 +239,15 @@ func UploadObjectHandler(c *gin.Context) {
 		}{Message: "Error creating metadata file"})
 		return
 	}
-	defer metadataFile.Close()
+	defer func(metadataFile *os.File) {
+		err := metadataFile.Close()
+		if err != nil {
+			c.XML(http.StatusInternalServerError, struct {
+				XMLName xml.Name `xml:"Error"`
+				Message string   `xml:"Message"`
+			}{Message: "Error closing metadata file"})
+		}
+	}(metadataFile)
 
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
@@ -347,7 +355,17 @@ func DownloadObjectHandler(c *gin.Context) {
 	if stat, err := os.Stat(metadataPath); err == nil && !stat.IsDir() {
 		metadataFile, err := os.Open(metadataPath)
 		if err == nil {
-			defer metadataFile.Close()
+			defer func(metadataFile *os.File) {
+				err := metadataFile.Close()
+				if err != nil {
+					c.XML(http.StatusInternalServerError, struct {
+						XMLName xml.Name `xml:"Error"`
+						Message string   `xml:"Message"`
+					}{
+						Message: "Error closing metadata file",
+					})
+				}
+			}(metadataFile)
 
 			// Decode the JSON metadata.
 			var metadata map[string]string
@@ -431,7 +449,17 @@ func GetObjectMetadataHandler(c *gin.Context) {
 		})
 		return
 	}
-	defer metadataFile.Close()
+	defer func(metadataFile *os.File) {
+		err := metadataFile.Close()
+		if err != nil {
+			c.XML(http.StatusInternalServerError, struct {
+				XMLName xml.Name `xml:"Error"`
+				Message string   `xml:"Message"`
+			}{
+				Message: "Error closing metadata file",
+			})
+		}
+	}(metadataFile)
 
 	// Decode the JSON metadata.
 	var metadata map[string]string

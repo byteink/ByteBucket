@@ -255,12 +255,3 @@ func DeleteUser(accessKeyID string) error {
 type ObjectMetadata struct {
 	ACL string `json:"acl"`
 }
-
-// GetObjectMetadata is a dummy lookup.
-// In production, store and retrieve object metadata from DB.
-func GetObjectMetadata(bucket, objectKey string) (ObjectMetadata, error) {
-	if bucket == "mypublicbucket" {
-		return ObjectMetadata{ACL: "public-read"}, nil
-	}
-	return ObjectMetadata{ACL: "private"}, nil
-}
