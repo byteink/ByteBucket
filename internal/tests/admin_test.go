@@ -35,9 +35,7 @@ func createS3Client(accessKey, secretKey string) *s3.Client {
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithRegion("us-east-1"),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
-		config.WithEndpointResolver(aws.EndpointResolverFunc(func(service, region string) (aws.Endpoint, error) {
-			return aws.Endpoint{URL: storageURL}, nil
-		})),
+		config.WithBaseEndpoint(storageURL),
 	)
 	if err != nil {
 		panic(fmt.Sprintf("unable to load SDK config: %v", err))
@@ -83,7 +81,12 @@ func createRestrictedUser(withListPermission bool) (string, string) {
 	if err != nil {
 		panic(err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			panic(err)
+		}
+	}(resp.Body)
 
 	if resp.StatusCode != http.StatusCreated {
 		panic(fmt.Sprintf("Failed to create user: %s", resp.Status))
@@ -122,7 +125,12 @@ func deleteUser(t *testing.T, accessKeyID string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}(resp.Body)
 
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("Failed to delete user: %s", resp.Status)
@@ -174,7 +182,12 @@ func testS3Operations(t *testing.T, client *s3.Client, bucket, key, content stri
 	if err != nil {
 		t.Fatalf("Failed to fetch object using presigned URL: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			t.Fatalf("Failed to close response body: %v", err)
+		}
+	}(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Unexpected response status: %s", resp.Status)
@@ -304,7 +317,12 @@ func TestPresignedURLExpiration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to fetch object using presigned URL: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			t.Fatalf("Failed to close response body: %v", err)
+		}
+	}(resp.Body)
 	if resp.StatusCode == http.StatusOK {
 		t.Fatalf("Expected presigned URL to expire, but it succeeded")
 	} else {

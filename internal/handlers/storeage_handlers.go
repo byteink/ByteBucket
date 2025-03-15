@@ -12,11 +12,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// HomeHandler returns a simple welcome message.
-func HomeHandler(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "Welcome to ByteBucket!"})
-}
-
 // HealthHandler returns a simple JSON status.
 func HealthHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -197,7 +192,17 @@ func UploadObjectHandler(c *gin.Context) {
 		})
 		return
 	}
-	defer f.Close()
+	defer func(f *os.File) {
+		err := f.Close()
+		if err != nil {
+			c.XML(http.StatusInternalServerError, struct {
+				XMLName xml.Name `xml:"Error"`
+				Message string   `xml:"Message"`
+			}{
+				Message: "Error closing file",
+			})
+		}
+	}(f)
 
 	// Copy the raw request body to the file.
 	if _, err := io.Copy(f, c.Request.Body); err != nil {
