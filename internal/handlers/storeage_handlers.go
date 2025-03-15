@@ -3,10 +3,12 @@ package handlers
 import (
 	"encoding/xml"
 	"fmt"
+	"github.com/goccy/go-json"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -164,7 +166,6 @@ func DeleteBucketHandler(c *gin.Context) {
 func UploadObjectHandler(c *gin.Context) {
 	bucketName := c.Param("bucket")
 	objectKey := c.Param("objectKey")
-	// Clean the object key (removes any redundant separators or relative paths)
 	objectKey = filepath.Clean(objectKey)
 
 	// Ensure the bucket directory exists.
@@ -211,6 +212,49 @@ func UploadObjectHandler(c *gin.Context) {
 			Message string   `xml:"Message"`
 		}{
 			Message: "Error saving file",
+		})
+		return
+	}
+
+	// Parse metadata from headers.
+	metadata := make(map[string]string)
+	for key, values := range c.Request.Header {
+		if strings.HasPrefix(key, "X-Amz-Meta-") {
+			metadata[key] = values[0]
+		}
+	}
+
+	// Store metadata in a JSON file.
+	metadataPath := dstPath + ".meta"
+	metadataFile, err := os.Create(metadataPath)
+	if err != nil {
+		c.XML(http.StatusInternalServerError, struct {
+			XMLName xml.Name `xml:"Error"`
+			Message string   `xml:"Message"`
+		}{
+			Message: "Error creating metadata file",
+		})
+		return
+	}
+	defer metadataFile.Close()
+
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		c.XML(http.StatusInternalServerError, struct {
+			XMLName xml.Name `xml:"Error"`
+			Message string   `xml:"Message"`
+		}{
+			Message: "Error encoding metadata",
+		})
+		return
+	}
+
+	if _, err := metadataFile.Write(metadataJSON); err != nil {
+		c.XML(http.StatusInternalServerError, struct {
+			XMLName xml.Name `xml:"Error"`
+			Message string   `xml:"Message"`
+		}{
+			Message: "Error writing metadata",
 		})
 		return
 	}
@@ -279,13 +323,16 @@ func ListObjectsHandler(c *gin.Context) {
 }
 
 // DownloadObjectHandler serves an object (file) from the specified bucket.
+// It also sets metadata headers from the associated metadata file (if available)
+// to be compatible with the S3 SDK GetObject response.
 func DownloadObjectHandler(c *gin.Context) {
 	bucketName := c.Param("bucket")
 	objectKey := c.Param("objectKey")
-	// Clean the object key to remove any redundant separators or relative paths
+	// Clean the object key to remove any redundant separators or relative paths.
 	objectKey = filepath.Clean(objectKey)
 	filePath := filepath.Join("/data/objects", bucketName, objectKey)
-	// Check if the file exists
+
+	// Check if the file exists.
 	if _, err := os.Stat(filePath); err != nil {
 		c.XML(http.StatusNotFound, struct {
 			XMLName xml.Name `xml:"Error"`
@@ -295,6 +342,43 @@ func DownloadObjectHandler(c *gin.Context) {
 		})
 		return
 	}
+
+	// Determine the metadata file path (stored alongside the object).
+	metadataPath := filePath + ".meta"
+	if stat, err := os.Stat(metadataPath); err == nil && !stat.IsDir() {
+		metadataFile, err := os.Open(metadataPath)
+		if err == nil {
+			defer metadataFile.Close()
+
+			// Decode the JSON metadata.
+			var metadata map[string]string
+			if err := json.NewDecoder(metadataFile).Decode(&metadata); err == nil {
+				// Set standard metadata headers and any custom headers.
+				for key, value := range metadata {
+					switch strings.ToLower(key) {
+					case "content-type":
+						c.Header("Content-Type", value)
+					case "content-length":
+						c.Header("Content-Length", value)
+					case "last-modified":
+						// Ensure Last-Modified is in the proper HTTP format.
+						if t, err := time.Parse(time.RFC1123, value); err == nil {
+							c.Header("Last-Modified", t.UTC().Format(http.TimeFormat))
+						} else {
+							c.Header("Last-Modified", value)
+						}
+					case "etag":
+						c.Header("ETag", value)
+					default:
+						// Any other metadata is exposed as custom metadata.
+						c.Header(key, value)
+					}
+				}
+			}
+		}
+	}
+
+	// Serve the file. The metadata headers above will be included in the response.
 	c.File(filePath)
 }
 
@@ -314,4 +398,83 @@ func DeleteObjectHandler(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+// GetObjectMetadataHandler retrieves the metadata for an object.
+// It supports S3 SDK compatibility by handling HEAD requests.
+func GetObjectMetadataHandler(c *gin.Context) {
+	bucketName := c.Param("bucket")
+	objectKey := c.Param("objectKey")
+	objectKey = filepath.Clean(objectKey)
+
+	// Determine the metadata file path.
+	metadataPath := filepath.Join("/data/objects", bucketName, objectKey+".meta")
+
+	// Check if the metadata file exists.
+	if _, err := os.Stat(metadataPath); os.IsNotExist(err) {
+		c.XML(http.StatusNotFound, struct {
+			XMLName xml.Name `xml:"Error"`
+			Message string   `xml:"Message"`
+		}{
+			Message: "Metadata not found",
+		})
+		return
+	}
+
+	// Read the metadata file.
+	metadataFile, err := os.Open(metadataPath)
+	if err != nil {
+		c.XML(http.StatusInternalServerError, struct {
+			XMLName xml.Name `xml:"Error"`
+			Message string   `xml:"Message"`
+		}{
+			Message: "Error opening metadata file",
+		})
+		return
+	}
+	defer metadataFile.Close()
+
+	// Decode the JSON metadata.
+	var metadata map[string]string
+	decoder := json.NewDecoder(metadataFile)
+	if err := decoder.Decode(&metadata); err != nil {
+		c.XML(http.StatusInternalServerError, struct {
+			XMLName xml.Name `xml:"Error"`
+			Message string   `xml:"Message"`
+		}{
+			Message: "Error decoding metadata",
+		})
+		return
+	}
+
+	// For HEAD requests, set the metadata as HTTP headers (no body)
+	if c.Request.Method == http.MethodHead {
+		// Iterate over the metadata and set headers.
+		for key, value := range metadata {
+			switch strings.ToLower(key) {
+			case "content-type":
+				c.Header("Content-Type", value)
+			case "content-length":
+				c.Header("Content-Length", value)
+			case "last-modified":
+				// Ensure Last-Modified is in a valid HTTP format.
+				// Attempt to parse the value as time if possible.
+				if t, err := time.Parse(time.RFC1123, value); err == nil {
+					c.Header("Last-Modified", t.UTC().Format(http.TimeFormat))
+				} else {
+					c.Header("Last-Modified", value)
+				}
+			case "etag":
+				c.Header("ETag", value)
+			default:
+				// Set other metadata as custom headers.
+				c.Header(key, value)
+			}
+		}
+		c.Status(http.StatusOK)
+		return
+	}
+
+	// For GET requests (or others), return the metadata as JSON.
+	c.JSON(http.StatusOK, metadata)
 }

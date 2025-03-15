@@ -241,7 +241,7 @@ func isUserAllowed(user *storage.User, method, bucket string) bool {
 
 func getActionFromMethod(method, bucket string) string {
 	switch method {
-	case http.MethodGet:
+	case http.MethodGet, http.MethodHead:
 		if bucket == "" {
 			return "s3:ListBuckets"
 		}

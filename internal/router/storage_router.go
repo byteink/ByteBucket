@@ -47,8 +47,12 @@ func NewStorageRouter() *gin.Engine {
 	})
 	// Download Object: GET /:bucket/*objectKey
 	r.GET("/:bucket/*objectKey", handlers.DownloadObjectHandler)
+
 	// Delete Object: DELETE /:bucket/*objectKey
 	r.DELETE("/:bucket/*objectKey", handlers.DeleteObjectHandler)
+
+	// HEAD Object: Retrieve object metadata (compatible with S3 SDK HeadObject API)
+	r.HEAD("/:bucket/*objectKey", handlers.GetObjectMetadataHandler)
 
 	return r
 }

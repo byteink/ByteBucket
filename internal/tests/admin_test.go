@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -427,6 +428,93 @@ func TestLargeFileUpload(t *testing.T) {
 	}
 	t.Logf("Deleting bucket %s", bucket)
 	_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{Bucket: aws.String(bucket)})
+	if err != nil {
+		t.Logf("Warning: failed to delete bucket: %v", err)
+	}
+}
+
+// TestGetObjectMetadata tests the retrieval of object metadata.
+func TestGetObjectMetadata(t *testing.T) {
+	client := createS3Client(adminCreds.AccessKeyID, adminCreds.SecretAccessKey)
+	bucket := "bucket-metadata-test"
+	key := "test.txt"
+	content := "Test content"
+	// S3 converts metadata keys to lowercase.
+	expectedMetadata := map[string]string{
+		"author": "Test Author",
+		"type":   "Test Type",
+	}
+
+	t.Logf("Creating bucket: %s", bucket)
+	_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create bucket: %v", err)
+	}
+
+	t.Logf("Uploading object to %s/%s with metadata", bucket, key)
+	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(key),
+		Body:     bytes.NewReader([]byte(content)),
+		Metadata: map[string]string{"author": "Test Author", "type": "Test Type"},
+	})
+	if err != nil {
+		t.Fatalf("Failed to upload object: %v", err)
+	}
+
+	// Retrieve metadata using HeadObject.
+	t.Log("Retrieving object metadata using HeadObject...")
+	headResp, err := client.HeadObject(context.TODO(), &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("Failed to retrieve head object: %v", err)
+	}
+
+	if !reflect.DeepEqual(headResp.Metadata, expectedMetadata) {
+		t.Fatalf("HeadObject metadata mismatch. Expected: %v, Got: %v", expectedMetadata, headResp.Metadata)
+	}
+
+	// Retrieve metadata using GetObject.
+	t.Log("Retrieving object metadata using GetObject...")
+	getResp, err := client.GetObject(context.TODO(), &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("Failed to retrieve object: %v", err)
+	}
+	defer getResp.Body.Close()
+
+	if !reflect.DeepEqual(getResp.Metadata, expectedMetadata) {
+		t.Fatalf("GetObject metadata mismatch. Expected: %v, Got: %v", expectedMetadata, getResp.Metadata)
+	}
+
+	// Verify object content.
+	body, err := io.ReadAll(getResp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read object body: %v", err)
+	}
+	if string(body) != content {
+		t.Fatalf("Object content mismatch. Expected: %s, Got: %s", content, string(body))
+	}
+
+	// Cleanup.
+	t.Logf("Deleting object %s", key)
+	_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Logf("Warning: failed to delete object: %v", err)
+	}
+	t.Logf("Deleting bucket %s", bucket)
+	_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+		Bucket: aws.String(bucket),
+	})
 	if err != nil {
 		t.Logf("Warning: failed to delete bucket: %v", err)
 	}
