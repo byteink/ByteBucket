@@ -308,6 +308,22 @@ func processPresignedAuth(c *gin.Context) {
 		return
 	}
 
+	// Validate the expiration time of the presigned URL.
+	expiration, err := time.ParseDuration(expires + "s")
+	if err != nil {
+		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Invalid X-Amz-Expires format")
+		return
+	}
+	t, err := time.Parse("20060102T150405Z", amzDate)
+	if err != nil {
+		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Invalid X-Amz-Date format")
+		return
+	}
+	if time.Now().UTC().After(t.Add(expiration)) {
+		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Presigned URL has expired")
+		return
+	}
+
 	// For presigned URLs, the canonical query string must be built from the URL query parameters
 	// but without the X-Amz-Signature.
 	// Make a copy of the query parameters, and remove "X-Amz-Signature".

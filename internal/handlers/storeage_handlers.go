@@ -142,6 +142,16 @@ func DeleteBucketHandler(c *gin.Context) {
 		return
 	}
 
+	if _, err := os.Stat(bucketPath); os.IsNotExist(err) {
+		c.XML(http.StatusNotFound, struct {
+			XMLName xml.Name `xml:"Error"`
+			Message string   `xml:"Message"`
+		}{
+			Message: "Bucket not found",
+		})
+		return
+	}
+
 	if err := os.RemoveAll(bucketPath); err != nil {
 		c.XML(http.StatusInternalServerError, struct {
 			XMLName xml.Name `xml:"Error"`
