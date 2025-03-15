@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/xml"
 	"fmt"
 	"github.com/goccy/go-json"
+	"hash/crc32"
 	"io"
 	"net/http"
 	"os"
@@ -174,9 +177,7 @@ func UploadObjectHandler(c *gin.Context) {
 		c.XML(http.StatusInternalServerError, struct {
 			XMLName xml.Name `xml:"Error"`
 			Message string   `xml:"Message"`
-		}{
-			Message: "Error creating bucket directory",
-		})
+		}{Message: "Error creating bucket directory"})
 		return
 	}
 
@@ -188,52 +189,54 @@ func UploadObjectHandler(c *gin.Context) {
 		c.XML(http.StatusInternalServerError, struct {
 			XMLName xml.Name `xml:"Error"`
 			Message string   `xml:"Message"`
-		}{
-			Message: "Error creating file",
-		})
+		}{Message: "Error creating file"})
 		return
 	}
-	defer func(f *os.File) {
-		err := f.Close()
-		if err != nil {
+	defer func() {
+		if err := f.Close(); err != nil {
 			c.XML(http.StatusInternalServerError, struct {
 				XMLName xml.Name `xml:"Error"`
 				Message string   `xml:"Message"`
-			}{
-				Message: "Error closing file",
-			})
+			}{Message: "Error closing file"})
 		}
-	}(f)
+	}()
 
-	// Copy the raw request body to the file.
-	if _, err := io.Copy(f, c.Request.Body); err != nil {
+	// Create a CRC32 hasher.
+	hasher := crc32.NewIEEE()
+	// Write to both the file and the hasher.
+	multiWriter := io.MultiWriter(f, hasher)
+	if _, err := io.Copy(multiWriter, c.Request.Body); err != nil {
 		c.XML(http.StatusInternalServerError, struct {
 			XMLName xml.Name `xml:"Error"`
 			Message string   `xml:"Message"`
-		}{
-			Message: "Error saving file",
-		})
+		}{Message: "Error saving file"})
 		return
 	}
+
+	// Compute the checksum value and encode it in base64.
+	checksumBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(checksumBytes, hasher.Sum32())
+	checksumBase64 := base64.StdEncoding.EncodeToString(checksumBytes)
 
 	// Parse metadata from headers.
 	metadata := make(map[string]string)
 	for key, values := range c.Request.Header {
-		if strings.HasPrefix(key, "X-Amz-Meta-") {
+		if strings.HasPrefix(strings.ToLower(key), "x-amz-meta-") {
 			metadata[key] = values[0]
 		}
 	}
 
-	// Store metadata in a JSON file.
+	// Store the computed checksum in metadata using the S3 standard header name.
+	metadata["x-amz-checksum-crc32"] = checksumBase64
+
+	// Store metadata in a JSON file (next to the object file).
 	metadataPath := dstPath + ".meta"
 	metadataFile, err := os.Create(metadataPath)
 	if err != nil {
 		c.XML(http.StatusInternalServerError, struct {
 			XMLName xml.Name `xml:"Error"`
 			Message string   `xml:"Message"`
-		}{
-			Message: "Error creating metadata file",
-		})
+		}{Message: "Error creating metadata file"})
 		return
 	}
 	defer metadataFile.Close()
@@ -243,9 +246,7 @@ func UploadObjectHandler(c *gin.Context) {
 		c.XML(http.StatusInternalServerError, struct {
 			XMLName xml.Name `xml:"Error"`
 			Message string   `xml:"Message"`
-		}{
-			Message: "Error encoding metadata",
-		})
+		}{Message: "Error encoding metadata"})
 		return
 	}
 
@@ -253,9 +254,7 @@ func UploadObjectHandler(c *gin.Context) {
 		c.XML(http.StatusInternalServerError, struct {
 			XMLName xml.Name `xml:"Error"`
 			Message string   `xml:"Message"`
-		}{
-			Message: "Error writing metadata",
-		})
+		}{Message: "Error writing metadata"})
 		return
 	}
 
