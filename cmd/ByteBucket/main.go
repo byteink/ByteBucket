@@ -89,5 +89,9 @@ func main() {
 		}
 	}()
 
+	// log something to know that the server is running
+
+	log.Println("Server started successfully")
+
 	wg.Wait()
 }

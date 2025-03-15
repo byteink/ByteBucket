@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"reflect"
 	"sync"
 	"testing"
@@ -16,11 +17,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// API endpoints
-const storageURL = "http://localhost:9000"
-const adminURL = "http://localhost:9001"
+// Global variables for dynamic URLs and container
+var byteBucketContainer testcontainers.Container
+var storageURL string
+var adminURL string
 
 // Admin credentials (provided for testing)
 var adminCreds = struct {
@@ -523,4 +527,62 @@ func TestGetObjectMetadata(t *testing.T) {
 	if err != nil {
 		t.Logf("Warning: failed to delete bucket: %v", err)
 	}
+}
+
+func TestMain(m *testing.M) {
+	ctx := context.Background()
+
+	// Define container request
+	req := testcontainers.ContainerRequest{
+		FromDockerfile: testcontainers.FromDockerfile{
+			Context:    "../..",               // Root project directory
+			Dockerfile: "./docker/Dockerfile", // Path to the Dockerfile
+		},
+		ExposedPorts: []string{"9000/tcp", "9001/tcp"},
+		WaitingFor:   wait.ForLog("Server started successfully").WithStartupTimeout(30 * time.Second),
+		Env: map[string]string{
+			"ENCRYPTION_KEY":    "zcY9EnJ5gVVDyfrNlXsuEOToLwC7cWsiz02xGKbBo1g=",
+			"ACCESS_KEY_ID":     "APE6at7CMFvJaEJjnmbC",
+			"SECRET_ACCESS_KEY": "40ylGQ3lRaxE/SQFRZrHZY+e+XD7CBMVa8ioUsAO",
+		},
+		Mounts: testcontainers.Mounts(testcontainers.VolumeMount("bytebucket", "/data")),
+	}
+
+	// Build and start container
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("Failed to build and start ByteBucket container: %v", err))
+	}
+	byteBucketContainer = container
+
+	// Retrieve mapped ports
+	mappedStoragePort, err := container.MappedPort(ctx, "9000")
+	if err != nil {
+		panic(fmt.Sprintf("Failed to get mapped storage port: %v", err))
+	}
+	mappedAdminPort, err := container.MappedPort(ctx, "9001")
+	if err != nil {
+		panic(fmt.Sprintf("Failed to get mapped admin port: %v", err))
+	}
+
+	// Assign dynamic URLs
+	storageURL = fmt.Sprintf("http://localhost:%s", mappedStoragePort.Port())
+	adminURL = fmt.Sprintf("http://localhost:%s", mappedAdminPort.Port())
+
+	fmt.Printf("ByteBucket container started:\n")
+	fmt.Printf("Storage API: %s\n", storageURL)
+	fmt.Printf("Admin API: %s\n", adminURL)
+
+	// Run tests
+	code := m.Run()
+
+	// Cleanup: Stop container after tests
+	if err := container.Terminate(ctx); err != nil {
+		fmt.Printf("Failed to stop ByteBucket container: %v\n", err)
+	}
+
+	os.Exit(code)
 }
