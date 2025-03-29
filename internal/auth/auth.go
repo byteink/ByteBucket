@@ -240,12 +240,22 @@ func isUserAllowed(user *storage.User, method, bucket string) bool {
 }
 
 func getActionFromMethod(method, bucket string) string {
+	fmt.Printf("[DEBUG AUTH] Method: %s, Bucket: %s\n", method, bucket)
+
 	switch method {
-	case http.MethodGet, http.MethodHead:
+	case http.MethodGet:
 		if bucket == "" {
 			return "s3:ListBuckets"
 		}
 		return "s3:GetObject"
+	case http.MethodHead:
+		if bucket == "" {
+			return "s3:ListBuckets"
+		}
+		// For HEAD requests to buckets (HeadBucket operation), we should return a bucket-level permission
+		// We need to add a special case for this
+		fmt.Printf("[DEBUG AUTH] Processing HEAD request for bucket: %s\n", bucket)
+		return "s3:HeadBucket" // Custom permission for HeadBucket operation
 	case http.MethodPut:
 		return "s3:PutObject"
 	case http.MethodDelete:
@@ -265,6 +275,20 @@ func isBucketAllowed(buckets []string, bucket string) bool {
 }
 
 func isActionAllowed(actions []string, action string) bool {
+	fmt.Printf("[DEBUG AUTH] Checking if action %s is allowed among: %v\n", action, actions)
+
+	// Special case: HeadBucket permission can be implied by having ListBucket or GetObject permission
+	if action == "s3:HeadBucket" {
+		for _, a := range actions {
+			if a == "*" || a == "s3:HeadBucket" || a == "s3:ListBucket" || a == "s3:GetObject" {
+				fmt.Printf("[DEBUG AUTH] HeadBucket allowed due to permission: %s\n", a)
+				return true
+			}
+		}
+		return false
+	}
+
+	// Normal case - check for exact match or wildcard
 	for _, a := range actions {
 		if a == "*" || a == action {
 			return true

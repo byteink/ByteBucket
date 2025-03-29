@@ -425,24 +425,54 @@ func DeleteObjectHandler(c *gin.Context) {
 func HeadBucketHandler(c *gin.Context) {
 	bucketName := c.Param("bucket")
 	if bucketName == "" {
+		fmt.Printf("[DEBUG] HeadBucket: Empty bucket name provided\n")
 		c.Status(http.StatusBadRequest)
 		return
 	}
 
+	fmt.Printf("[DEBUG] HeadBucket: Checking if bucket '%s' exists\n", bucketName)
 	bucketPath := filepath.Join("/data/objects", bucketName)
+	fmt.Printf("[DEBUG] HeadBucket: Full path is '%s'\n", bucketPath)
+
+	// Debug: List all buckets to see what's available
+	basePath := "/data/objects"
+	entries, err := os.ReadDir(basePath)
+	if err != nil {
+		fmt.Printf("[DEBUG] HeadBucket: Error reading base directory: %v\n", err)
+	} else {
+		fmt.Printf("[DEBUG] HeadBucket: Available buckets in %s:\n", basePath)
+		for _, entry := range entries {
+			if entry.IsDir() {
+				fmt.Printf("[DEBUG] HeadBucket: - %s\n", entry.Name())
+			}
+		}
+	}
 
 	// Check if the bucket exists by attempting to stat the directory
-	if _, err := os.Stat(bucketPath); os.IsNotExist(err) {
+	fileInfo, err := os.Stat(bucketPath)
+	if os.IsNotExist(err) {
+		fmt.Printf("[DEBUG] HeadBucket: Bucket path '%s' does not exist\n", bucketPath)
 		// Bucket does not exist, return 404 Not Found with no body per S3 API
 		c.Status(http.StatusNotFound)
 		return
 	} else if err != nil {
+		fmt.Printf("[DEBUG] HeadBucket: Error checking bucket: %v\n", err)
 		// Some other error occurred
 		c.Status(http.StatusInternalServerError)
 		return
 	}
 
+	fmt.Printf("[DEBUG] HeadBucket: Bucket '%s' exists, isDir: %v\n", bucketName, fileInfo.IsDir())
+
+	// Add additional check to ensure it's a directory
+	if !fileInfo.IsDir() {
+		fmt.Printf("[DEBUG] HeadBucket: '%s' exists but is not a directory\n", bucketPath)
+		c.Status(http.StatusNotFound)
+		return
+	}
+
 	// Bucket exists and user is authorized (auth middleware already ran)
+	fmt.Printf("[DEBUG] HeadBucket: Successfully verified bucket '%s'\n", bucketName)
 	c.Status(http.StatusOK)
 }
 

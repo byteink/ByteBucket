@@ -593,7 +593,10 @@ func TestHeadBucket(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
-	resp.Body.Close()
+	err = resp.Body.Close()
+	if err != nil {
+		return
+	}
 
 	userAccessKey, ok := user["accessKeyID"].(string)
 	if !ok {
@@ -641,6 +644,41 @@ func TestHeadBucket(t *testing.T) {
 	t.Logf("Deleting bucket %s", restrictedBucket)
 	_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
 		Bucket: aws.String(restrictedBucket),
+	})
+	if err != nil {
+		t.Logf("Warning: failed to delete bucket: %v", err)
+	}
+}
+
+// TestHeadDefaultBucket specifically tests the HeadBucket operation on a bucket named "default"
+// to ensure it doesn't have any special handling issues.
+func TestHeadDefaultBucket(t *testing.T) {
+	client := createS3Client(adminCreds.AccessKeyID, adminCreds.SecretAccessKey)
+	defaultBucket := "default"
+
+	// Create a bucket named "default" for testing
+	t.Logf("Creating bucket: %s", defaultBucket)
+	_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		Bucket: aws.String(defaultBucket),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create bucket: %v", err)
+	}
+
+	// Test HeadBucket on the default bucket - should succeed
+	t.Logf("Testing HeadBucket on bucket: %s", defaultBucket)
+	_, err = client.HeadBucket(context.TODO(), &s3.HeadBucketInput{
+		Bucket: aws.String(defaultBucket),
+	})
+	if err != nil {
+		t.Fatalf("Expected HeadBucket to succeed on 'default' bucket but got error: %v", err)
+	}
+	t.Log("HeadBucket succeeded on 'default' bucket as expected")
+
+	// Cleanup
+	t.Logf("Deleting bucket %s", defaultBucket)
+	_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+		Bucket: aws.String(defaultBucket),
 	})
 	if err != nil {
 		t.Logf("Warning: failed to delete bucket: %v", err)
