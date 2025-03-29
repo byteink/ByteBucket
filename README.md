@@ -15,6 +15,7 @@ ByteBucket is a self-hosted, fully S3-compatible object storage system built in 
 5. [Admin API Endpoints](#admin-api-endpoints)
     - [Health Check](#health-check)
     - [User Management](#user-management)
+    - [CORS Configuration](#cors-configuration)
 6. [Using Node.js AWS SDK](#using-nodejs-aws-sdk)
 7. [Using Admin API (Node.js)](#using-admin-api-nodejs)
 8. [Troubleshooting](#troubleshooting)
@@ -31,6 +32,7 @@ ByteBucket is a self-hosted, fully S3-compatible object storage system built in 
 - **Dockerized:** Separate Dockerfiles for production and development environments.
 - **Live Reloading:** Automatic reload with Air in development mode.
 - **Admin API:** Manage users and access controls via an authenticated RESTful API.
+- **Dynamic CORS:** Configure Cross-Origin Resource Sharing with glob pattern support.
 
 ## Prerequisites
 - Go 1.24 or later
@@ -84,6 +86,41 @@ docker-compose -f docker/docker-compose.dev.yml up
 - **List Users:** `GET /users`
 - **Update User:** `PUT /users/:accessKeyID`
 - **Delete User:** `DELETE /users/:accessKeyID`
+
+### CORS Configuration
+- **Get CORS Config:** `GET /cors`
+- **Update CORS Config:** `PUT /cors`
+  ```json
+  {
+    "allowed_origins": ["*.example.com", "app.domain.com"],
+    "allowed_methods": ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"],
+    "allowed_headers": ["Authorization", "Content-Type", "X-Amz-Date", "..."],
+    "expose_headers": ["ETag", "Content-Length", "..."],
+    "max_age": 600
+  }
+  ```
+
+#### Example with curl
+
+```bash
+# Get current CORS configuration
+curl -X GET http://localhost:9001/cors \
+  -H "X-Admin-AccessKey: your_admin_access_key" \
+  -H "X-Admin-Secret: your_admin_secret_key"
+
+# Update CORS configuration
+curl -X PUT http://localhost:9001/cors \
+  -H "X-Admin-AccessKey: your_admin_access_key" \
+  -H "X-Admin-Secret: your_admin_secret_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "allowed_origins": ["*.example.com", "dashboard.myapp.com"],
+    "allowed_methods": ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"],
+    "allowed_headers": ["Authorization", "Content-Type", "X-Amz-Date", "X-Amz-Algorithm", "X-Amz-Credential", "X-Amz-SignedHeaders", "X-Amz-Signature"],
+    "expose_headers": ["ETag", "Content-Length", "Content-Type", "Last-Modified"],
+    "max_age": 600
+  }'
+```
 
 ---
 
@@ -155,9 +192,58 @@ async function deleteUser(accessKeyID: string) {
   await adminAPI.delete(`/users/${accessKeyID}`);
 }
 
+// Get CORS configuration
+async function getCORSConfig() {
+  const response = await adminAPI.get('/cors');
+  console.log(response.data);
+}
+
+// Update CORS configuration
+async function updateCORSConfig() {
+  await adminAPI.put('/cors', {
+    allowed_origins: ["*.example.com", "subdomain.mydomain.com"],
+    allowed_methods: ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"],
+    allowed_headers: ["Authorization", "Content-Type"],
+    expose_headers: ["ETag", "Content-Length"],
+    max_age: 600 // 10 minutes
+  });
+}
+
 createUser();
 listUsers();
 ```
+
+---
+
+## CORS Configuration
+
+ByteBucket provides flexible Cross-Origin Resource Sharing (CORS) configuration to allow secure API access from web applications.
+
+### Environment Configuration
+
+CORS can be quickly configured using the `CORS_ALLOWED_ORIGINS` environment variable:
+
+```bash
+# Configure multiple allowed origins with a comma-separated list
+CORS_ALLOWED_ORIGINS=app.mysite.com,api.example.org docker-compose up
+```
+
+### Glob Pattern Support
+
+ByteBucket supports wildcards and glob patterns for allowed origins:
+
+- `*` - Allow all origins
+- `*.example.com` - Allow all subdomains of example.com
+- `example.com/*` - Allow all paths on example.com
+
+### Programmatic Configuration
+
+CORS settings are persisted to disk at `/data/cors.json` and can be updated through the Admin API.
+
+Default CORS settings include:
+- All standard HTTP methods
+- Common AWS-compatible storage headers
+- 10-minute preflight caching
 
 ---
 
@@ -174,4 +260,3 @@ Contributions are welcome! Fork the repository, implement changes, and submit a 
 
 ## License
 Licensed under the [Server Side Public License](https://www.mongodb.com/licensing/server-side-public-license), allowing free use for open-source and commercial products but prohibiting offering the software itself as a managed, paid service without open-sourcing the complete service stack.
-

@@ -3,6 +3,7 @@ package router
 import (
 	"ByteBucket/internal/auth"
 	"ByteBucket/internal/handlers"
+	"ByteBucket/internal/middleware"
 
 	"fmt"
 
@@ -20,6 +21,9 @@ func NewStorageRouter() *gin.Engine {
 	// Attach recovery middleware to handle panics gracefully.
 	r.Use(gin.Recovery())
 
+	// Apply CORS middleware first so it can handle OPTIONS preflight requests
+	r.Use(middleware.CORSMiddleware())
+
 	// Add a debug middleware to log all requests
 	r.Use(func(c *gin.Context) {
 		fmt.Printf("[DEBUG ROUTER] Request: %s %s\n", c.Request.Method, c.Request.URL.Path)
@@ -30,6 +34,13 @@ func NewStorageRouter() *gin.Engine {
 
 	// Public health check endpoint (no authentication required).
 	r.GET("/health", handlers.HealthHandler)
+
+	// The following route handles OPTIONS preflight requests
+	r.OPTIONS("/*path", func(c *gin.Context) {
+		// This is a no-op since the CORS middleware already handled it
+		// and set the necessary headers
+		c.Status(204)
+	})
 
 	// All S3 operations below require authentication.
 	r.Use(auth.AuthMiddleware)

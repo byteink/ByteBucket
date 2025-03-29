@@ -9,6 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.78.2
 	github.com/boltdb/bolt v1.3.1
 	github.com/gin-gonic/gin v1.10.0
+	github.com/gobwas/glob v0.2.3
 )
 
 require (

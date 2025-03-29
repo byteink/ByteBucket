@@ -104,3 +104,49 @@ func DeleteUserHandler(c *gin.Context) {
 	}
 	c.Status(http.StatusNoContent)
 }
+
+// CORSConfigRequest represents the request payload for updating CORS configuration
+type CORSConfigRequest struct {
+	AllowedOrigins []string `json:"allowed_origins" binding:"required"` // List of allowed origins (can include glob patterns)
+	AllowedMethods []string `json:"allowed_methods" binding:"required"` // HTTP methods allowed
+	AllowedHeaders []string `json:"allowed_headers" binding:"required"` // HTTP headers allowed
+	ExposeHeaders  []string `json:"expose_headers"`                     // HTTP headers exposed to browsers
+	MaxAge         int      `json:"max_age"`                            // Preflight cache duration in seconds
+}
+
+// GetCORSConfigHandler returns the current CORS configuration
+func GetCORSConfigHandler(c *gin.Context) {
+	config, err := storage.LoadCORSConfig()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Error loading CORS config: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, config)
+}
+
+// UpdateCORSConfigHandler updates the CORS configuration
+func UpdateCORSConfigHandler(c *gin.Context) {
+	var req CORSConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
+		return
+	}
+
+	// Convert request to storage format
+	config := storage.CORSConfig{
+		AllowedOrigins: req.AllowedOrigins,
+		AllowedMethods: req.AllowedMethods,
+		AllowedHeaders: req.AllowedHeaders,
+		ExposeHeaders:  req.ExposeHeaders,
+		MaxAge:         req.MaxAge,
+	}
+
+	// Save the configuration
+	if err := storage.SaveCORSConfig(config); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Error saving CORS config: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "CORS configuration updated successfully"})
+}
