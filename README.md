@@ -33,6 +33,7 @@ ByteBucket is a self-hosted, fully S3-compatible object storage system built in 
 - **Live Reloading:** Automatic reload with Air in development mode.
 - **Admin API:** Manage users and access controls via an authenticated RESTful API.
 - **Dynamic CORS:** Configure Cross-Origin Resource Sharing with glob pattern support.
+- **Nested Object Paths:** Supports storing objects with nested paths (e.g., "folder/subfolder/file.txt").
 
 ## Prerequisites
 - Go 1.24 or later
@@ -69,6 +70,22 @@ docker-compose -f docker/docker-compose.yml up -d
 ### Development Mode
 ```bash
 docker-compose -f docker/docker-compose.dev.yml up
+```
+
+### Running Tests
+To run all tests with verbose output:
+```bash
+go test -v ./tests/
+```
+
+If you encounter Docker build issues while running tests, you can manually build the Docker image first:
+```bash
+# Build the Docker image manually
+docker build -f docker/Dockerfile -t bytebucket-test .
+
+# Then update the test container configuration in tests/main_test.go:
+# Replace the FromDockerfile section with:
+# Image: "bytebucket-test",
 ```
 
 ---
@@ -250,6 +267,9 @@ Default CORS settings include:
 ## Troubleshooting
 - Verify `.air.toml` and Docker configurations if development reload issues occur.
 - Run `go mod tidy` for dependency-related errors.
+- When deleting an object that doesn't exist, ByteBucket returns a 204 No Content (success) response, matching S3 behavior.
+- Both the object and its metadata file are deleted when using DeleteObject operations.
+- ByteBucket supports nested paths for objects (e.g., "folder/subfolder/file.txt") and automatically creates the required directory structure.
 
 ---
 

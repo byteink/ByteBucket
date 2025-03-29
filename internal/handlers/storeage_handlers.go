@@ -210,6 +210,17 @@ func UploadObjectHandler(c *gin.Context) {
 
 	// Determine the destination file path.
 	dstPath := filepath.Join(bucketPath, objectKey)
+
+	// Ensure parent directories exist for nested objects
+	parentDir := filepath.Dir(dstPath)
+	if err := os.MkdirAll(parentDir, 0755); err != nil {
+		c.XML(http.StatusInternalServerError, struct {
+			XMLName xml.Name `xml:"Error"`
+			Message string   `xml:"Message"`
+		}{Message: "Error creating parent directories"})
+		return
+	}
+
 	// Create or truncate the file.
 	f, err := os.Create(dstPath)
 	if err != nil {
@@ -432,7 +443,10 @@ func DeleteObjectHandler(c *gin.Context) {
 	objectKey := c.Param("objectKey")
 	objectKey = filepath.Clean(objectKey)
 	filePath := filepath.Join("/data/objects", bucketName, objectKey)
-	if err := os.Remove(filePath); err != nil {
+
+	err := os.Remove(filePath)
+	if err != nil && !os.IsNotExist(err) {
+		// Only fail if there's an error other than file not existing
 		c.XML(http.StatusInternalServerError, struct {
 			XMLName xml.Name `xml:"Error"`
 			Message string   `xml:"Message"`
@@ -441,6 +455,12 @@ func DeleteObjectHandler(c *gin.Context) {
 		})
 		return
 	}
+
+	// Also try to delete metadata file if it exists
+	metadataPath := filePath + ".meta"
+	_ = os.Remove(metadataPath) // Ignore any errors when removing metadata
+
+	// Always return 204 No Content regardless of whether the object existed
 	c.Status(http.StatusNoContent)
 }
 

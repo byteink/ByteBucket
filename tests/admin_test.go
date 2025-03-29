@@ -734,3 +734,375 @@ func TestCreateExistingBucket(t *testing.T) {
 		t.Logf("Warning: failed to delete bucket: %v", err)
 	}
 }
+
+// TestDeleteNonExistentObject verifies that deleting an object that doesn't exist returns success (204 No Content).
+// This matches S3's behavior where deleting a non-existent object is considered a successful operation.
+func TestDeleteNonExistentObject(t *testing.T) {
+	// Create S3 client
+	client := createS3Client(adminCreds.AccessKeyID, adminCreds.SecretAccessKey)
+
+	// Create a bucket for testing
+	bucket := fmt.Sprintf("nonexistent-obj-test-%d", time.Now().UnixNano())
+	_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create bucket: %v", err)
+	}
+
+	// Attempt to delete a non-existent object
+	nonExistentKey := "this/object/does/not/exist.txt"
+	deleteOutput, err := client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(nonExistentKey),
+	})
+
+	// Assert no error is returned
+	if err != nil {
+		t.Fatalf("Expected no error when deleting non-existent object, got: %v", err)
+	}
+
+	t.Logf("DeleteObject response for non-existent object: %+v", deleteOutput)
+
+	// Clean up the bucket
+	_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Logf("Warning: Failed to delete bucket during cleanup: %v", err)
+	}
+}
+
+// TestDeleteObjectMetadata verifies that metadata files are correctly deleted when objects are deleted.
+func TestDeleteObjectMetadata(t *testing.T) {
+	// Create S3 client
+	client := createS3Client(adminCreds.AccessKeyID, adminCreds.SecretAccessKey)
+
+	// Create a bucket for testing
+	bucket := fmt.Sprintf("metadata-delete-test-%d", time.Now().UnixNano())
+	_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create bucket: %v", err)
+	}
+
+	// Create an object with metadata
+	key := "test-file-with-metadata.txt"
+	content := "This is a test file with metadata"
+
+	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader([]byte(content)),
+		ContentType: aws.String("text/plain"),
+		Metadata: map[string]string{
+			"test-key": "test-value",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to upload object with metadata: %v", err)
+	}
+
+	// Verify object and metadata exist by getting object metadata
+	headResp, err := client.HeadObject(context.TODO(), &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("Failed to get object metadata: %v", err)
+	}
+	if headResp.Metadata["test-key"] != "test-value" {
+		t.Fatalf("Expected metadata test-key=test-value, got %s", headResp.Metadata["test-key"])
+	}
+
+	// Delete the object
+	_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("Failed to delete object: %v", err)
+	}
+
+	// Verify object and metadata don't exist anymore
+	_, err = client.HeadObject(context.TODO(), &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err == nil {
+		t.Fatalf("Object should not exist after deletion")
+	}
+
+	// Check if error indicates the object doesn't exist
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.ErrorCode() != "NotFound" {
+			t.Fatalf("Expected NotFound error, got %s", apiErr.ErrorCode())
+		}
+	} else {
+		t.Fatalf("Expected APIError with NotFound code, got %v", err)
+	}
+
+	// Clean up the bucket
+	_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Logf("Warning: Failed to delete bucket during cleanup: %v", err)
+	}
+}
+
+// TestDeleteObjectBehavior tests various scenarios for DeleteObject operation
+// to ensure it matches S3's behavior for existing and non-existent objects
+func TestDeleteObjectBehavior(t *testing.T) {
+	client := createS3Client(adminCreds.AccessKeyID, adminCreds.SecretAccessKey)
+	bucket := fmt.Sprintf("delete-object-test-%d", time.Now().UnixNano())
+
+	t.Logf("Creating bucket: %s", bucket)
+	_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create bucket: %v", err)
+	}
+
+	// Test Case 1: Delete an existing object
+	existingKey := "existing-object.txt"
+	content := "This is an existing object"
+
+	t.Logf("Uploading object to %s/%s", bucket, existingKey)
+	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(existingKey),
+		Body:        bytes.NewReader([]byte(content)),
+		ContentType: aws.String("text/plain"),
+		Metadata: map[string]string{
+			"test-key": "test-value",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to upload existing object: %v", err)
+	}
+
+	// Verify object exists
+	_, err = client.HeadObject(context.TODO(), &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(existingKey),
+	})
+	if err != nil {
+		t.Fatalf("Expected object to exist, but got error: %v", err)
+	}
+
+	// Delete existing object
+	t.Logf("Deleting existing object %s/%s", bucket, existingKey)
+	_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(existingKey),
+	})
+	if err != nil {
+		t.Fatalf("Failed to delete existing object: %v", err)
+	}
+
+	// Verify object was deleted
+	_, err = client.HeadObject(context.TODO(), &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(existingKey),
+	})
+	if err == nil {
+		t.Fatalf("Object should have been deleted but still exists")
+	}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.ErrorCode() != "NotFound" {
+			t.Fatalf("Expected NotFound error for deleted object, got: %s", apiErr.ErrorCode())
+		}
+	} else {
+		t.Fatalf("Unexpected error type: %v", err)
+	}
+
+	// Test Case 2: Delete a non-existent object
+	nonExistentKey := "this/object/does/not/exist.txt"
+
+	// Delete non-existent object - should succeed with 204 No Content
+	t.Logf("Deleting non-existent object %s/%s", bucket, nonExistentKey)
+	deleteResp, err := client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(nonExistentKey),
+	})
+	if err != nil {
+		t.Fatalf("Expected no error when deleting non-existent object, got: %v", err)
+	}
+
+	t.Logf("DeleteObject response for non-existent object: %v", deleteResp)
+
+	// Test Case 3: Create and delete object with nested path
+	nestedKey := "nested/path/to/object.txt"
+	nestedContent := "This is a nested object"
+
+	t.Logf("Uploading nested object to %s/%s", bucket, nestedKey)
+	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(nestedKey),
+		Body:   bytes.NewReader([]byte(nestedContent)),
+	})
+	if err != nil {
+		t.Fatalf("Failed to upload nested object: %v", err)
+	}
+
+	// Delete nested object
+	t.Logf("Deleting nested object %s/%s", bucket, nestedKey)
+	_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(nestedKey),
+	})
+	if err != nil {
+		t.Fatalf("Failed to delete nested object: %v", err)
+	}
+
+	// Verify nested object was deleted
+	_, err = client.HeadObject(context.TODO(), &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(nestedKey),
+	})
+	if err == nil {
+		t.Fatalf("Nested object should have been deleted but still exists")
+	}
+
+	// Test Case 4: Delete the same non-existent object again
+	t.Logf("Deleting already deleted object again %s/%s", bucket, existingKey)
+	_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(existingKey),
+	})
+	if err != nil {
+		t.Fatalf("Expected no error when deleting already deleted object, got: %v", err)
+	}
+
+	// Clean up bucket
+	t.Logf("Cleaning up bucket %s", bucket)
+	_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Logf("Warning: Failed to delete bucket during cleanup: %v", err)
+	}
+}
+
+// TestDeleteObjectMetadataCleanup tests that metadata files are properly cleaned up
+// when objects are deleted, including the case where only a metadata file exists
+func TestDeleteObjectMetadataCleanup(t *testing.T) {
+	// Setup: Create a bucket, object with metadata, and verify everything is created properly
+	client := createS3Client(adminCreds.AccessKeyID, adminCreds.SecretAccessKey)
+	bucket := fmt.Sprintf("metadata-cleanup-test-%d", time.Now().UnixNano())
+
+	t.Logf("Creating bucket: %s", bucket)
+	_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create bucket: %v", err)
+	}
+
+	// Create object with rich metadata
+	objectKey := "metadata-test-object.txt"
+	content := "This is a test object with metadata"
+
+	t.Logf("Creating object with metadata: %s/%s", bucket, objectKey)
+	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(objectKey),
+		Body:        bytes.NewReader([]byte(content)),
+		ContentType: aws.String("text/plain"),
+		Metadata: map[string]string{
+			"author":       "Test Author",
+			"description":  "Test Description",
+			"version":      "1.0",
+			"content-info": "Test metadata with multiple fields",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create object with metadata: %v", err)
+	}
+
+	// Verify metadata exists via HeadObject
+	headResp, err := client.HeadObject(context.TODO(), &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(objectKey),
+	})
+	if err != nil {
+		t.Fatalf("Failed to get object metadata: %v", err)
+	}
+
+	if len(headResp.Metadata) == 0 {
+		t.Fatalf("Expected metadata to exist, but none found")
+	}
+
+	t.Logf("Object created with metadata: %v", headResp.Metadata)
+
+	// Test: Delete the object
+	t.Logf("Deleting object with metadata: %s/%s", bucket, objectKey)
+	_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(objectKey),
+	})
+	if err != nil {
+		t.Fatalf("Failed to delete object: %v", err)
+	}
+
+	// Verify object and metadata are gone
+	_, err = client.HeadObject(context.TODO(), &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(objectKey),
+	})
+	if err == nil {
+		t.Fatalf("Object should have been deleted but still exists")
+	}
+
+	// Test: Create object again to verify metadata is fully removed
+	t.Logf("Creating new object at same key: %s/%s", bucket, objectKey)
+	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(objectKey),
+		Body:        bytes.NewReader([]byte("New content")),
+		ContentType: aws.String("text/plain"),
+		Metadata: map[string]string{
+			"new-metadata": "This should be the only metadata",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create new object: %v", err)
+	}
+
+	// Verify only new metadata exists
+	headResp2, err := client.HeadObject(context.TODO(), &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(objectKey),
+	})
+	if err != nil {
+		t.Fatalf("Failed to get new object metadata: %v", err)
+	}
+
+	if len(headResp2.Metadata) != 1 || headResp2.Metadata["new-metadata"] != "This should be the only metadata" {
+		t.Fatalf("Expected only new metadata to exist, got: %v", headResp2.Metadata)
+	}
+
+	t.Logf("New object has correct metadata: %v", headResp2.Metadata)
+
+	// Clean up
+	t.Logf("Cleaning up test objects and bucket")
+	_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(objectKey),
+	})
+	if err != nil {
+		t.Logf("Warning: Failed to delete object during cleanup: %v", err)
+	}
+
+	_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Logf("Warning: Failed to delete bucket during cleanup: %v", err)
+	}
+}

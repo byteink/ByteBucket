@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -68,6 +69,8 @@ func TestMain(m *testing.M) {
 
 	// === RUN DOCKER TEST ===
 	fmt.Println("Starting Docker-Based Test...")
+
+	// Try building the container directly
 	req := testcontainers.ContainerRequest{
 		FromDockerfile: testcontainers.FromDockerfile{
 			Context:    "..",                  // Root project directory
@@ -88,8 +91,45 @@ func TestMain(m *testing.M) {
 		ContainerRequest: req,
 		Started:          true,
 	})
+
+	// If building from Dockerfile fails, try using a pre-built image
 	if err != nil {
-		panic(fmt.Sprintf("Failed to build and start ByteBucket container: %v", err))
+		fmt.Printf("Failed to build from Dockerfile: %v\n", err)
+		fmt.Println("Attempting to build the Docker image manually...")
+
+		// Try to build the image manually
+		cmd := exec.Command("docker", "build", "-f", "../docker/Dockerfile", "-t", "bytebucket-test", "..")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("Manual Docker build failed: %v\n", err)
+			fmt.Println("Please run the following commands manually before running tests:")
+			fmt.Println("  cd .. && docker build -f docker/Dockerfile -t bytebucket-test .")
+			os.Exit(1)
+		}
+
+		// Use the manually built image
+		reqWithImage := testcontainers.ContainerRequest{
+			Image:        "bytebucket-test",
+			ExposedPorts: []string{"9000/tcp", "9001/tcp"},
+			WaitingFor:   wait.ForLog("Server started successfully").WithStartupTimeout(30 * time.Second),
+			Env: map[string]string{
+				"ENCRYPTION_KEY":    adminCreds.EncryptionKey,
+				"ACCESS_KEY_ID":     adminCreds.AccessKeyID,
+				"SECRET_ACCESS_KEY": adminCreds.SecretAccessKey,
+			},
+			Mounts: testcontainers.Mounts(testcontainers.VolumeMount("bytebucket", "/data")),
+		}
+
+		container, err = testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: reqWithImage,
+			Started:          true,
+		})
+
+		if err != nil {
+			panic(fmt.Sprintf("Failed to start container from pre-built image: %v", err))
+		}
 	}
 
 	// Retrieve mapped ports
