@@ -423,6 +423,13 @@ func DeleteObjectHandler(c *gin.Context) {
 // a 404 Not Found if the bucket does not exist, or a 403 Forbidden if the caller
 // does not have permission to access the bucket.
 func HeadBucketHandler(c *gin.Context) {
+	// Log complete request details
+	fmt.Printf("[DEBUG] HeadBucket: Complete request URL: %s\n", c.Request.URL.String())
+	fmt.Printf("[DEBUG] HeadBucket: Request method: %s\n", c.Request.Method)
+	fmt.Printf("[DEBUG] HeadBucket: Request headers: %v\n", c.Request.Header)
+	fmt.Printf("[DEBUG] HeadBucket: Request host: %s\n", c.Request.Host)
+	fmt.Printf("[DEBUG] HeadBucket: Request path: %s\n", c.Request.URL.Path)
+
 	bucketName := c.Param("bucket")
 	if bucketName == "" {
 		fmt.Printf("[DEBUG] HeadBucket: Empty bucket name provided\n")
