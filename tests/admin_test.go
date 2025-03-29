@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 )
 
 // createS3Client creates an S3 client with the given credentials.
@@ -679,6 +681,54 @@ func TestHeadDefaultBucket(t *testing.T) {
 	t.Logf("Deleting bucket %s", defaultBucket)
 	_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
 		Bucket: aws.String(defaultBucket),
+	})
+	if err != nil {
+		t.Logf("Warning: failed to delete bucket: %v", err)
+	}
+}
+
+// TestCreateExistingBucket verifies that creating a bucket that already exists
+// returns a BucketAlreadyOwnedByYou error, similar to AWS S3
+func TestCreateExistingBucket(t *testing.T) {
+	client := createS3Client(adminCreds.AccessKeyID, adminCreds.SecretAccessKey)
+	existingBucket := "existing-bucket-test"
+
+	// Create a bucket for testing
+	t.Logf("Creating bucket: %s", existingBucket)
+	_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		Bucket: aws.String(existingBucket),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create bucket: %v", err)
+	}
+
+	// Try to create the same bucket again
+	t.Logf("Attempting to create the same bucket again: %s", existingBucket)
+	_, err = client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		Bucket: aws.String(existingBucket),
+	})
+
+	// Verify we get the correct error
+	if err == nil {
+		t.Fatal("Expected error when creating existing bucket, but got none")
+	}
+
+	// Check for BucketAlreadyOwnedByYou error
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		t.Logf("Error code: %s", apiErr.ErrorCode())
+		if apiErr.ErrorCode() != "BucketAlreadyOwnedByYou" {
+			t.Fatalf("Expected BucketAlreadyOwnedByYou error, got: %s", apiErr.ErrorCode())
+		}
+		t.Logf("Creating existing bucket failed with expected error: %v", err)
+	} else {
+		t.Fatalf("Expected an API error, got: %v", err)
+	}
+
+	// Clean up
+	t.Logf("Deleting bucket %s", existingBucket)
+	_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+		Bucket: aws.String(existingBucket),
 	})
 	if err != nil {
 		t.Logf("Warning: failed to delete bucket: %v", err)

@@ -31,18 +31,44 @@ func CreateBucketHandler(c *gin.Context) {
 		c.XML(http.StatusBadRequest, struct {
 			XMLName xml.Name `xml:"Error"`
 			Message string   `xml:"Message"`
+			Code    string   `xml:"Code"`
 		}{
+			Code:    "InvalidBucketName",
 			Message: "Bucket name required",
 		})
 		return
 	}
 
 	bucketPath := filepath.Join("/data/objects", bucketName)
+
+	// Check if the bucket already exists
+	if fileInfo, err := os.Stat(bucketPath); err == nil && fileInfo.IsDir() {
+		fmt.Printf("[DEBUG] CreateBucket: Bucket %s already exists\n", bucketName)
+		// Return BucketAlreadyOwnedByYou error, similar to AWS S3
+		c.XML(http.StatusConflict, struct {
+			XMLName    xml.Name `xml:"Error"`
+			Code       string   `xml:"Code"`
+			Message    string   `xml:"Message"`
+			BucketName string   `xml:"BucketName"`
+			RequestId  string   `xml:"RequestId"`
+			HostId     string   `xml:"HostId"`
+		}{
+			Code:       "BucketAlreadyOwnedByYou",
+			Message:    "Your previous request to create the named bucket succeeded and you already own it.",
+			BucketName: bucketName,
+			RequestId:  "dummy-request-id",
+			HostId:     "",
+		})
+		return
+	}
+
 	if err := os.MkdirAll(bucketPath, 0755); err != nil {
 		c.XML(http.StatusInternalServerError, struct {
 			XMLName xml.Name `xml:"Error"`
 			Message string   `xml:"Message"`
+			Code    string   `xml:"Code"`
 		}{
+			Code:    "InternalError",
 			Message: "Error creating bucket",
 		})
 		return
