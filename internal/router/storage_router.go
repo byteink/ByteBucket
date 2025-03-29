@@ -3,6 +3,7 @@ package router
 import (
 	"ByteBucket/internal/auth"
 	"ByteBucket/internal/handlers"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -31,6 +32,9 @@ func NewStorageRouter() *gin.Engine {
 	r.PUT("/:bucket", handlers.CreateBucketHandler)
 	// Delete Bucket: DELETE /:bucket
 	r.DELETE("/:bucket", handlers.DeleteBucketHandler)
+
+	// Head Bucket: HEAD /:bucket - check if a bucket exists and the caller has permission
+	r.HEAD("/:bucket", handlers.HeadBucketHandler)
 
 	// Object-level operations.
 	// List Objects in a bucket: GET /:bucket (query parameters like ?list-type=2 handled in the handler)

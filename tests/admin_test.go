@@ -511,3 +511,138 @@ func TestGetObjectMetadata(t *testing.T) {
 		t.Logf("Warning: failed to delete bucket: %v", err)
 	}
 }
+
+// TestHeadBucket tests the HeadBucket operation on existing and non-existing buckets.
+func TestHeadBucket(t *testing.T) {
+	client := createS3Client(adminCreds.AccessKeyID, adminCreds.SecretAccessKey)
+	existingBucket := "bucket-head-test"
+	restrictedBucket := "bucket-restricted-head-test"
+	nonExistentBucket := "nonexistent-bucket-12345"
+
+	// Create buckets for testing
+	t.Logf("Creating bucket: %s", existingBucket)
+	_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		Bucket: aws.String(existingBucket),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create bucket: %v", err)
+	}
+
+	t.Logf("Creating bucket: %s", restrictedBucket)
+	_, err = client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		Bucket: aws.String(restrictedBucket),
+	})
+	if err != nil {
+		t.Fatalf("Failed to create bucket: %v", err)
+	}
+
+	// Test HeadBucket on existing bucket - should succeed
+	t.Logf("Testing HeadBucket on existing bucket: %s", existingBucket)
+	_, err = client.HeadBucket(context.TODO(), &s3.HeadBucketInput{
+		Bucket: aws.String(existingBucket),
+	})
+	if err != nil {
+		t.Fatalf("Expected HeadBucket to succeed on existing bucket but got error: %v", err)
+	}
+	t.Log("HeadBucket succeeded on existing bucket as expected")
+
+	// Test HeadBucket on non-existent bucket - should fail
+	t.Logf("Testing HeadBucket on non-existent bucket: %s", nonExistentBucket)
+	_, err = client.HeadBucket(context.TODO(), &s3.HeadBucketInput{
+		Bucket: aws.String(nonExistentBucket),
+	})
+	if err == nil {
+		t.Fatal("Expected HeadBucket to fail on non-existent bucket, but it succeeded")
+	}
+	t.Logf("HeadBucket failed on non-existent bucket as expected: %v", err)
+
+	// Create a restricted user with custom permissions for this test
+	// Prepare ACL rules payload with access to bucket-head-test
+	var aclRules []map[string]interface{}
+	aclRules = append(aclRules, map[string]interface{}{
+		"effect":  "Allow",
+		"buckets": []string{existingBucket},
+		"actions": []string{"*"},
+	})
+
+	userPayload := map[string]interface{}{
+		"acl": aclRules,
+	}
+
+	body, _ := json.Marshal(userPayload)
+	req, err := http.NewRequest("POST", adminURL+"/users", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admin-AccessKey", adminCreds.AccessKeyID)
+	req.Header.Set("X-Admin-Secret", adminCreds.SecretAccessKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("Failed to create user: %s", resp.Status)
+	}
+
+	// Parse the response to get user credentials
+	var user map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+	resp.Body.Close()
+
+	userAccessKey, ok := user["accessKeyID"].(string)
+	if !ok {
+		t.Fatal("accessKeyID is not a string")
+	}
+	userSecretKey, ok := user["secretAccessKey"].(string)
+	if !ok {
+		t.Fatal("secretAccessKey is not a string")
+	}
+
+	restrictedClient := createS3Client(userAccessKey, userSecretKey)
+
+	// Test HeadBucket on authorized bucket - should succeed
+	t.Logf("Testing restricted user HeadBucket on authorized bucket: %s", existingBucket)
+	_, err = restrictedClient.HeadBucket(context.TODO(), &s3.HeadBucketInput{
+		Bucket: aws.String(existingBucket),
+	})
+	if err != nil {
+		t.Fatalf("Expected restricted user HeadBucket to succeed on authorized bucket but got error: %v", err)
+	}
+	t.Log("Restricted user HeadBucket succeeded on authorized bucket as expected")
+
+	// Test HeadBucket on unauthorized bucket - should fail
+	t.Logf("Testing restricted user HeadBucket on unauthorized bucket: %s", restrictedBucket)
+	_, err = restrictedClient.HeadBucket(context.TODO(), &s3.HeadBucketInput{
+		Bucket: aws.String(restrictedBucket),
+	})
+	if err == nil {
+		t.Fatal("Expected restricted user HeadBucket to fail on unauthorized bucket, but it succeeded")
+	}
+	t.Logf("Restricted user HeadBucket failed on unauthorized bucket as expected: %v", err)
+
+	// Clean up the restricted user
+	deleteUser(t, userAccessKey)
+
+	// Cleanup buckets
+	t.Logf("Deleting bucket %s", existingBucket)
+	_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+		Bucket: aws.String(existingBucket),
+	})
+	if err != nil {
+		t.Logf("Warning: failed to delete bucket: %v", err)
+	}
+
+	t.Logf("Deleting bucket %s", restrictedBucket)
+	_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+		Bucket: aws.String(restrictedBucket),
+	})
+	if err != nil {
+		t.Logf("Warning: failed to delete bucket: %v", err)
+	}
+}

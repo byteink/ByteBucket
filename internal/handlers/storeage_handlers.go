@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"encoding/xml"
 	"fmt"
-	"github.com/goccy/go-json"
 	"hash/crc32"
 	"io"
 	"net/http"
@@ -13,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/goccy/go-json"
 
 	"github.com/gin-gonic/gin"
 )
@@ -415,6 +416,34 @@ func DeleteObjectHandler(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+// HeadBucketHandler checks if a bucket exists and if the caller has permission to access it.
+// It returns a 200 OK if the bucket exists and the caller has permission,
+// a 404 Not Found if the bucket does not exist, or a 403 Forbidden if the caller
+// does not have permission to access the bucket.
+func HeadBucketHandler(c *gin.Context) {
+	bucketName := c.Param("bucket")
+	if bucketName == "" {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+
+	bucketPath := filepath.Join("/data/objects", bucketName)
+
+	// Check if the bucket exists by attempting to stat the directory
+	if _, err := os.Stat(bucketPath); os.IsNotExist(err) {
+		// Bucket does not exist, return 404 Not Found with no body per S3 API
+		c.Status(http.StatusNotFound)
+		return
+	} else if err != nil {
+		// Some other error occurred
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	// Bucket exists and user is authorized (auth middleware already ran)
+	c.Status(http.StatusOK)
 }
 
 // GetObjectMetadataHandler retrieves the metadata for an object.
