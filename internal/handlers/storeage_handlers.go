@@ -460,6 +460,29 @@ func DeleteObjectHandler(c *gin.Context) {
 	metadataPath := filePath + ".meta"
 	_ = os.Remove(metadataPath) // Ignore any errors when removing metadata
 
+	// Clean up empty parent directories
+	parentDir := filepath.Dir(filePath)
+	bucketDir := filepath.Join("/data/objects", bucketName)
+
+	// Start from the deepest directory and work our way up
+	// but don't delete the bucket directory itself
+	for parentDir != bucketDir && parentDir != "/" {
+		entries, err := os.ReadDir(parentDir)
+		if err != nil || len(entries) > 0 {
+			// If we can't read the directory or it's not empty, stop cleanup
+			break
+		}
+
+		// Directory is empty, try to remove it
+		if err := os.Remove(parentDir); err != nil {
+			// If we can't remove the directory, stop cleanup
+			break
+		}
+
+		// Move up to the parent directory
+		parentDir = filepath.Dir(parentDir)
+	}
+
 	// Always return 204 No Content regardless of whether the object existed
 	c.Status(http.StatusNoContent)
 }
