@@ -4,6 +4,7 @@ services:
     build:
       context: ..          # Set context to the project root
       dockerfile: docker/Dockerfile
+    restart: unless-stopped
     ports:
       - "9000:9000"  # for storage api
       - "9001:9001"  # for admin api
