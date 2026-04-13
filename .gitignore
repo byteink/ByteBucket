@@ -57,3 +57,4 @@ web/dist/
 web/tsconfig.tsbuildinfo
 internal/webui/dist/*
 !internal/webui/dist/.gitkeep
+!internal/webui/dist/index.html
