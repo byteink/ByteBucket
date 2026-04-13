@@ -9,27 +9,22 @@ import (
 )
 
 // NewStorageRouter sets up Gin routes and middleware in an S3-compatible
-// manner. The actual route table is shared with the admin router via
-// RegisterStorageRoutes — this function only wires the SigV4-specific
+// manner. The route table is shared with the admin router via
+// RegisterStorageRoutes; this function only wires the SigV4-specific
 // middleware and public endpoints.
 func NewStorageRouter() *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 
-	// CORS must run before auth so OPTIONS preflights bypass SigV4.
-	// The global middleware is replaced with per-bucket CORS in a later
-	// commit; keeping it here until then preserves preflight behaviour.
-	r.Use(middleware.CORSMiddleware())
-
 	// Public health check (no authentication required).
 	r.GET("/health", handlers.HealthHandler)
 
-	// Preflight handler. The CORS middleware has already populated the
-	// response headers; we just acknowledge with 204.
-	r.OPTIONS("/*path", func(c *gin.Context) {
-		c.Status(204)
-	})
+	// Per-bucket CORS must run before SigV4 so browser preflights (which are
+	// unauthenticated) can be answered. Buckets without a CORS config return
+	// 403 for preflights, matching S3 behaviour; there is no global CORS
+	// policy anymore.
+	r.Use(middleware.BucketCORSMiddleware())
 
 	// All S3 operations below require SigV4 authentication. AuthMiddleware
 	// publishes the authenticated user on the Gin context; the shared storage

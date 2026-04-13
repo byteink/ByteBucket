@@ -32,9 +32,6 @@ func NewAdminRouter() *gin.Engine {
 		protected.PUT("/users/:accessKeyID", handlers.UpdateUserHandler)
 		protected.DELETE("/users/:accessKeyID", handlers.DeleteUserHandler)
 
-		protected.GET("/cors", handlers.GetCORSConfigHandler)
-		protected.PUT("/cors", handlers.UpdateCORSConfigHandler)
-
 		// Storage operations mounted under /s3 using the same handler code
 		// as the SigV4 surface on port 9000. This eliminates a parallel
 		// admin implementation of bucket/object CRUD; the admin middleware

@@ -10,7 +10,6 @@ require (
 	github.com/aws/smithy-go v1.22.2
 	github.com/boltdb/bolt v1.3.1
 	github.com/gin-gonic/gin v1.10.0
-	github.com/gobwas/glob v0.2.3
 	github.com/goccy/go-json v0.10.5
 	github.com/testcontainers/testcontainers-go v0.35.0
 )
