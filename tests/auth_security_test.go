@@ -172,6 +172,35 @@ func TestE2E_Bug2_PayloadHashMismatch(t *testing.T) {
 	}
 }
 
+// TestE2E_Bug3_StaleTimestampRejected: valid signature but X-Amz-Date
+// 30 minutes in the past — server must reject with 401 and the request
+// must not be processed by the bucket handler.
+func TestE2E_Bug3_StaleTimestampRejected(t *testing.T) {
+	bucket := fmt.Sprintf("bug3-%d", time.Now().UnixNano())
+	stale := time.Now().Add(-30 * time.Minute)
+
+	req := buildHeaderSigned(t, storageURL, sigV4Request{
+		method: http.MethodPut, path: "/" + bucket,
+		accessKey: adminCreds.AccessKeyID, secret: adminCreds.SecretAccessKey,
+		now: stale,
+	})
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "Request timestamp expired") {
+		t.Fatalf("expected timestamp-expired message, got %s", body)
+	}
+	if strings.Count(string(body), "<Error>") != 1 {
+		t.Fatalf("expected exactly one <Error> element, got: %s", body)
+	}
+}
+
 // TestE2E_Bug1_TamperedSignatureRejected: flip one byte in the signature,
 // expect 401 SignatureDoesNotMatch.
 func TestE2E_Bug1_TamperedSignatureRejected(t *testing.T) {

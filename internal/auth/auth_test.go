@@ -264,5 +264,75 @@ func TestAuth_Bug2_BodyPreservedForHandler(t *testing.T) {
 	}
 }
 
+// Bug 3: when validateTimestamp rejects, the middleware must return
+// immediately. In the buggy version execution continued into isUserAllowed,
+// which can overwrite the 401 response with a 403 (or worse, double-write).
+// A user with a restrictive ACL surfaces this: on a stale timestamp the
+// response must be 401, not 403.
+func TestAuth_Bug3_StaleTimestampStopsBeforeACL(t *testing.T) {
+	// Bootstrap storage and create a user with an ACL that denies the
+	// target action, so the buggy post-validateTimestamp path would
+	// produce a 403.
+	gin.SetMode(gin.TestMode)
+	dir := t.TempDir()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("rand: %v", err)
+	}
+	storage.SetEncryptionKey(key)
+	if err := storage.InitUserStore(fmt.Sprintf("users-%d.db", time.Now().UnixNano())); err != nil {
+		t.Fatalf("InitUserStore: %v", err)
+	}
+	secret := "restrictedsecret"
+	enc, err := storage.Encrypt(secret)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	ak := fmt.Sprintf("RK%d", time.Now().UnixNano())
+	if err := storage.CreateUser(&storage.User{
+		AccessKeyID:     ak,
+		EncryptedSecret: enc,
+		ACL: []storage.ACLRule{
+			{Effect: "Allow", Buckets: []string{"only-this"}, Actions: []string{"s3:GetObject"}},
+		},
+	}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	body := []byte("x")
+	stale := time.Now().Add(-30 * time.Minute)
+	req := httptest.NewRequest(http.MethodPut, "/test", bytes.NewReader(body))
+	signRequest(t, req, body, ak, secret, "us-east-1", "s3", stale, "")
+
+	called := false
+	w := httptest.NewRecorder()
+	buildEngine(&called).ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 from timestamp rejection, got %d, body=%s", w.Code, w.Body.String())
+	}
+	if called {
+		t.Fatal("handler must not run for stale timestamp")
+	}
+	// Body must contain exactly one XML Error document. In the buggy
+	// version the middleware kept executing after validateTimestamp and
+	// the subsequent ACL denial produced a second XML body.
+	if n := strings.Count(w.Body.String(), "<Error>"); n != 1 {
+		t.Fatalf("expected exactly one <Error> element, got %d, body=%s", n, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Request timestamp expired") {
+		t.Fatalf("expected timestamp-expired message, got %s", w.Body.String())
+	}
+}
+
 // keep unused imports pulled in
 var _ = io.Discard

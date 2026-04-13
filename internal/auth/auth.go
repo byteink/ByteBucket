@@ -251,7 +251,9 @@ func processHeaderAuth(c *gin.Context, authHeader string) {
 		return
 	}
 
-	validateTimestamp(c, amzDate)
+	if !validateTimestamp(c, amzDate) {
+		return
+	}
 
 	// Check if the user is allowed to perform the action
 	if !isUserAllowed(user, c.Request.Method, c.Param("bucket")) {
@@ -456,7 +458,9 @@ func processPresignedAuth(c *gin.Context) {
 		return
 	}
 
-	validateTimestamp(c, amzDate)
+	if !validateTimestamp(c, amzDate) {
+		return
+	}
 	c.Next()
 }
 
@@ -557,16 +561,20 @@ func getSigningKey(secret, date, region, service string) []byte {
 	return kSigning
 }
 
-// validateTimestamp checks that the provided amzDate is within 15 minutes of the current time.
-func validateTimestamp(c *gin.Context, amzDate string) {
+// validateTimestamp checks that the provided amzDate is within 15 minutes
+// of the current time. Returns true on success. On failure the response is
+// aborted with an error; the caller MUST return immediately without running
+// any further middleware logic.
+func validateTimestamp(c *gin.Context, amzDate string) bool {
 	t, err := time.Parse("20060102T150405Z", amzDate)
 	if err != nil {
 		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Invalid X-Amz-Date format")
-		return
+		return false
 	}
 	now := time.Now().UTC()
 	if now.Sub(t) > 15*time.Minute || t.Sub(now) > 15*time.Minute {
 		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Request timestamp expired")
-		return
+		return false
 	}
+	return true
 }
