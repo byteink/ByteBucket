@@ -139,6 +139,39 @@ func ensureBucket(t *testing.T, ak, sk, bucket string) {
 	_ = resp.Body.Close()
 }
 
+// TestE2E_Bug2_PayloadHashMismatch: send a PUT whose claimed
+// X-Amz-Content-Sha256 is signed consistently but does not match the
+// actual body. Server must reject with 400 XAmzContentSHA256Mismatch.
+func TestE2E_Bug2_PayloadHashMismatch(t *testing.T) {
+	bucket := fmt.Sprintf("bug2-bucket-%d", time.Now().UnixNano())
+	ensureBucket(t, adminCreds.AccessKeyID, adminCreds.SecretAccessKey, bucket)
+
+	realBody := []byte("real body")
+	fakeHash := sha256Hex([]byte("not the real body"))
+
+	req := buildHeaderSigned(t, storageURL, sigV4Request{
+		method: http.MethodPut, path: "/" + bucket + "/obj.txt",
+		body:        realBody,
+		payloadHash: fakeHash,
+		accessKey:   adminCreds.AccessKeyID,
+		secret:      adminCreds.SecretAccessKey,
+	})
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "XAmzContentSHA256Mismatch") &&
+		!strings.Contains(string(body), "BadDigest") {
+		t.Fatalf("expected XAmzContentSHA256Mismatch/BadDigest, got %s", body)
+	}
+}
+
 // TestE2E_Bug1_TamperedSignatureRejected: flip one byte in the signature,
 // expect 401 SignatureDoesNotMatch.
 func TestE2E_Bug1_TamperedSignatureRejected(t *testing.T) {

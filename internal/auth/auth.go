@@ -1,12 +1,14 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -197,6 +199,26 @@ func processHeaderAuth(c *gin.Context, authHeader string) {
 	if payloadHash == "" {
 		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Missing X-Amz-Content-Sha256 header")
 		return
+	}
+
+	// Verify body hash matches the claimed X-Amz-Content-Sha256, unless the
+	// client signalled that verification is intentionally skipped
+	// (UNSIGNED-PAYLOAD or chunked STREAMING-*). Without this check, an
+	// attacker with a valid signature for hash H could submit arbitrary
+	// bytes instead, bypassing integrity.
+	if payloadHash != "UNSIGNED-PAYLOAD" && !strings.HasPrefix(payloadHash, "STREAMING-") {
+		buf, readErr := io.ReadAll(c.Request.Body)
+		if readErr != nil {
+			abortWithError(c, http.StatusBadRequest, "IncompleteBody", "Failed to read request body")
+			return
+		}
+		sum := sha256.Sum256(buf)
+		if hex.EncodeToString(sum[:]) != payloadHash {
+			abortWithError(c, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "The provided 'x-amz-content-sha256' header does not match what was computed")
+			return
+		}
+		// Restore body for downstream handlers.
+		c.Request.Body = io.NopCloser(bytes.NewReader(buf))
 	}
 
 	canonicalRequest, err := buildCanonicalRequest(c, signedHeaders, payloadHash, nil)

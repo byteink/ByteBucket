@@ -183,5 +183,86 @@ func TestAuth_Bug1_ValidSignaturePasses(t *testing.T) {
 	}
 }
 
+// Bug 2: server must verify body SHA-256 against X-Amz-Content-Sha256.
+// When the signed header claims a payload hash that does not match the body,
+// the request is rejected with 400 XAmzContentSHA256Mismatch.
+func TestAuth_Bug2_PayloadHashMismatchRejected(t *testing.T) {
+	ak, secret := setupStorage(t)
+
+	body := []byte("actual body bytes")
+	// Sign a request whose X-Amz-Content-Sha256 claims a *different* payload.
+	// The claimed hash must be used consistently in the signature so the
+	// signature itself verifies; then the server must still catch that the
+	// body does not match the claimed hash.
+	fakeHash := hashSHA256("a totally different body")
+	req := httptest.NewRequest(http.MethodPut, "/test", bytes.NewReader(body))
+	signRequest(t, req, body, ak, secret, "us-east-1", "s3", time.Now(), fakeHash)
+
+	called := false
+	w := httptest.NewRecorder()
+	buildEngine(&called).ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d, body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "XAmzContentSHA256Mismatch") &&
+		!strings.Contains(w.Body.String(), "BadDigest") {
+		t.Fatalf("expected XAmzContentSHA256Mismatch/BadDigest, got %s", w.Body.String())
+	}
+	if called {
+		t.Fatal("handler must not run when payload hash mismatches body")
+	}
+}
+
+// Bug 2: UNSIGNED-PAYLOAD and STREAMING-* payload hashes skip verification.
+func TestAuth_Bug2_UnsignedPayloadSkipsVerification(t *testing.T) {
+	ak, secret := setupStorage(t)
+
+	body := []byte("anything")
+	req := httptest.NewRequest(http.MethodPut, "/test", bytes.NewReader(body))
+	signRequest(t, req, body, ak, secret, "us-east-1", "s3", time.Now(), "UNSIGNED-PAYLOAD")
+
+	called := false
+	w := httptest.NewRecorder()
+	buildEngine(&called).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for UNSIGNED-PAYLOAD, got %d, body=%s", w.Code, w.Body.String())
+	}
+	if !called {
+		t.Fatal("handler must run when payload hash is UNSIGNED-PAYLOAD")
+	}
+}
+
+// Bug 2: body must remain readable by downstream handlers after verification.
+func TestAuth_Bug2_BodyPreservedForHandler(t *testing.T) {
+	ak, secret := setupStorage(t)
+
+	body := []byte("preserved payload")
+	req := httptest.NewRequest(http.MethodPut, "/test", bytes.NewReader(body))
+	signRequest(t, req, body, ak, secret, "us-east-1", "s3", time.Now(), "")
+
+	// Custom engine that echoes the body.
+	r := gin.New()
+	r.Use(AuthMiddleware)
+	r.PUT("/test", func(c *gin.Context) {
+		b, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			c.String(http.StatusInternalServerError, "read: %v", err)
+			return
+		}
+		c.Data(http.StatusOK, "application/octet-stream", b)
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body=%s", w.Code, w.Body.String())
+	}
+	if !bytes.Equal(w.Body.Bytes(), body) {
+		t.Fatalf("body not preserved: got %q want %q", w.Body.Bytes(), body)
+	}
+}
+
 // keep unused imports pulled in
 var _ = io.Discard
