@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"ByteBucket/internal/middleware"
+	"ByteBucket/internal/storage"
 
 	"github.com/goccy/go-json"
 
@@ -120,6 +121,17 @@ func ListBucketsHandler(c *gin.Context) {
 		ID          string `xml:"ID" json:"id"`
 		DisplayName string `xml:"DisplayName" json:"displayName"`
 	}
+	// Owner reflects the authenticated caller. Auth middleware publishes the
+	// storage.User on the context; we fall back to empty strings only if the
+	// handler is ever reached without auth — the routers today prevent that,
+	// but a nil assertion would mask a configuration error and is not worth
+	// the panic risk on a response path.
+	var ownerID string
+	if v, ok := c.Get("user"); ok {
+		if u, ok := v.(*storage.User); ok {
+			ownerID = u.AccessKeyID
+		}
+	}
 	xmlResult := struct {
 		XMLName xml.Name `xml:"ListAllMyBucketsResult"`
 		XMLNS   string   `xml:"xmlns,attr"`
@@ -129,7 +141,9 @@ func ListBucketsHandler(c *gin.Context) {
 		} `xml:"Buckets"`
 	}{
 		XMLNS: "http://s3.amazonaws.com/doc/2006-03-01/",
-		Owner: owner{ID: "dummy-owner-id", DisplayName: "dummy-owner"},
+		// DisplayName is an opaque label in S3; reusing the access key keeps
+		// it predictable without inventing a new user-profile field.
+		Owner: owner{ID: ownerID, DisplayName: ownerID},
 	}
 	xmlResult.Buckets.Bucket = buckets
 
