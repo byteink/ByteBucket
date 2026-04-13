@@ -472,5 +472,118 @@ func TestAuth_Bug4_PresignedWithHashInQueryPasses(t *testing.T) {
 	}
 }
 
+// Context propagation: a valid SigV4 header request must publish the
+// authenticated user on the Gin context so downstream handlers can read it
+// without re-deriving identity.
+func TestAuth_ContextCarriesUserOnSigV4Header(t *testing.T) {
+	ak, secret := setupStorage(t)
+
+	body := []byte("ctx")
+	req := httptest.NewRequest(http.MethodPut, "/test", bytes.NewReader(body))
+	signRequest(t, req, body, ak, secret, "us-east-1", "s3", time.Now(), "")
+
+	var seenUser *storage.User
+	var seenMethod string
+	r := gin.New()
+	r.Use(AuthMiddleware)
+	r.PUT("/test", func(c *gin.Context) {
+		if v, ok := c.Get("user"); ok {
+			seenUser = v.(*storage.User)
+		}
+		if v, ok := c.Get("authMethod"); ok {
+			seenMethod = v.(string)
+		}
+		c.Status(http.StatusOK)
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if seenUser == nil || seenUser.AccessKeyID != ak {
+		t.Fatalf("expected user %s in context, got %+v", ak, seenUser)
+	}
+	if seenMethod != "sigv4" {
+		t.Fatalf("expected authMethod=sigv4, got %q", seenMethod)
+	}
+}
+
+// Context propagation: a valid presigned URL must publish the authenticated
+// user on the Gin context.
+func TestAuth_ContextCarriesUserOnPresigned(t *testing.T) {
+	ak, secret := setupStorage(t)
+
+	presigned := signPresignedURL(t, http.MethodGet,
+		"http://example.com/test", ak, secret, "us-east-1", "s3",
+		"UNSIGNED-PAYLOAD", "host", false)
+
+	req := httptest.NewRequest(http.MethodGet, presigned, nil)
+	req.Host = "example.com"
+
+	var seenUser *storage.User
+	var seenMethod string
+	r := gin.New()
+	r.Use(AuthMiddleware)
+	r.GET("/test", func(c *gin.Context) {
+		if v, ok := c.Get("user"); ok {
+			seenUser = v.(*storage.User)
+		}
+		if v, ok := c.Get("authMethod"); ok {
+			seenMethod = v.(string)
+		}
+		c.Status(http.StatusOK)
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if seenUser == nil || seenUser.AccessKeyID != ak {
+		t.Fatalf("expected user %s in context, got %+v", ak, seenUser)
+	}
+	if seenMethod != "sigv4" {
+		t.Fatalf("expected authMethod=sigv4, got %q", seenMethod)
+	}
+}
+
+// Context propagation: a successful admin middleware pass must publish the
+// authenticated user on the Gin context under authMethod=admin so storage
+// handlers mounted on the admin surface can share identity.
+func TestAdminAuth_ContextCarriesUser(t *testing.T) {
+	ak, secret := setupStorage(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("X-Admin-AccessKey", ak)
+	req.Header.Set("X-Admin-Secret", secret)
+
+	var seenUser *storage.User
+	var seenMethod string
+	r := gin.New()
+	r.Use(AdminAuthMiddleware)
+	r.GET("/x", func(c *gin.Context) {
+		if v, ok := c.Get("user"); ok {
+			seenUser = v.(*storage.User)
+		}
+		if v, ok := c.Get("authMethod"); ok {
+			seenMethod = v.(string)
+		}
+		c.Status(http.StatusOK)
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if seenUser == nil || seenUser.AccessKeyID != ak {
+		t.Fatalf("expected user %s in context, got %+v", ak, seenUser)
+	}
+	if seenMethod != "admin" {
+		t.Fatalf("expected authMethod=admin, got %q", seenMethod)
+	}
+}
+
 // keep unused imports pulled in
 var _ = io.Discard

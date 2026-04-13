@@ -115,6 +115,10 @@ func AdminAuthMiddleware(c *gin.Context) {
 		return
 	}
 
+	// Publish the authenticated admin user so storage handlers mounted on
+	// the admin surface can share the same code path as the SigV4 surface.
+	c.Set("user", user)
+	c.Set("authMethod", "admin")
 	// All checks passed, continue to the next handler.
 	c.Next()
 }
@@ -261,6 +265,11 @@ func processHeaderAuth(c *gin.Context, authHeader string) {
 		return
 	}
 
+	// Publish authenticated identity for downstream handlers. Without this,
+	// handlers would need to re-derive the user from the request, duplicating
+	// signature parsing and opening a window for drift between auth and authz.
+	c.Set("user", user)
+	c.Set("authMethod", "sigv4")
 	c.Next()
 }
 
@@ -448,6 +457,10 @@ func processPresignedAuth(c *gin.Context) {
 	if !validateTimestamp(c, amzDate) {
 		return
 	}
+	// Publish authenticated identity for downstream handlers. See header
+	// auth path for rationale.
+	c.Set("user", user)
+	c.Set("authMethod", "sigv4")
 	c.Next()
 }
 
