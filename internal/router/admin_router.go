@@ -34,6 +34,14 @@ func NewAdminRouter() *gin.Engine {
 
 		protected.GET("/cors", handlers.GetCORSConfigHandler)
 		protected.PUT("/cors", handlers.UpdateCORSConfigHandler)
+
+		// Storage operations mounted under /s3 using the same handler code
+		// as the SigV4 surface on port 9000. This eliminates a parallel
+		// admin implementation of bucket/object CRUD; the admin middleware
+		// publishes the authenticated user on the context so the shared
+		// handlers need no knowledge of which surface they are serving.
+		s3 := protected.Group("/s3")
+		RegisterStorageRoutes(s3)
 	}
 
 	// Embedded admin SPA. Any path not matched above falls through to the
