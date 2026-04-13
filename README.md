@@ -18,9 +18,21 @@ ByteBucket is a self-hosted, fully S3-compatible object storage system built in 
     - [CORS Configuration](#cors-configuration)
 6. [Using Node.js AWS SDK](#using-nodejs-aws-sdk)
 7. [Using Admin API (Node.js)](#using-admin-api-nodejs)
-8. [Troubleshooting](#troubleshooting)
-9. [Contributing](#contributing)
-10. [License](#license)
+8. [Admin Web UI](#admin-web-ui)
+9. [Security / Deployment](#security--deployment)
+10. [Troubleshooting](#troubleshooting)
+11. [Contributing](#contributing)
+12. [License](#license)
+
+## Admin Web UI
+ByteBucket ships with a small React admin UI served by the Go binary at `http://<host>:9001/`. The UI is built with Vite and embedded into the binary via `go:embed`.
+
+- Production: `docker build -f docker/Dockerfile .` (the Dockerfile builds the UI in a node stage before `go build`).
+- Local: `make ui && go run ./cmd/ByteBucket`, then open `http://localhost:9001`.
+- Dev mode: `cd web && npm run dev` (Vite on :5173 proxies admin API calls to :9001).
+
+## Security / Deployment
+**The admin port (9001) must not be exposed to the public internet.** Bind it to localhost or a private network. The UI uses simple header-based auth with no session cookies, CSRF protection, or rate limiting — credentials live in the browser's localStorage after login. Hardening items (sessions, CSRF, rate limiting, TOTP, in-process TLS) are tracked in [SECURITY.md](SECURITY.md).
 
 ---
 
