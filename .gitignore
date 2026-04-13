@@ -51,3 +51,9 @@ tmp
 # Mesc
 .DS_Store
 
+# Web UI build artifacts
+web/node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo
+internal/webui/dist/*
+!internal/webui/dist/.gitkeep
