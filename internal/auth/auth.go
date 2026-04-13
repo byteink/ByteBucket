@@ -3,6 +3,7 @@ package auth
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
@@ -16,6 +17,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// constantTimeStringEqual reports whether two strings are equal in
+// constant time relative to their length. Unequal lengths short-circuit but
+// do not leak content of either input.
+func constantTimeStringEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
 
 // S3ErrorResponse represents a typical S3 error response.
 type S3ErrorResponse struct {
@@ -63,7 +74,9 @@ func AdminAuthMiddleware(c *gin.Context) {
 	}
 
 	// Verify that the provided secret matches the stored (decrypted) secret.
-	if providedSecret != storedSecret {
+	// Use a length-tolerant constant-time comparison to avoid leaking the
+	// stored secret's length or content via response timing.
+	if !constantTimeStringEqual(providedSecret, storedSecret) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid admin secret"})
 		return
 	}
@@ -207,8 +220,11 @@ func processHeaderAuth(c *gin.Context, authHeader string) {
 	}
 
 	signingKey := getSigningKey("AWS4"+secret, date, region, service)
-	expectedSignature := hex.EncodeToString(hmacSHA256([]byte(stringToSign), signingKey))
-	if expectedSignature != signatureProvided {
+	expectedSig := hmacSHA256([]byte(stringToSign), signingKey)
+	providedSig, err := hex.DecodeString(signatureProvided)
+	// Compare raw bytes via hmac.Equal to avoid timing leaks. A malformed
+	// hex signature decodes to nil and will not equal a real HMAC.
+	if err != nil || !hmac.Equal(expectedSig, providedSig) {
 		abortWithError(c, http.StatusUnauthorized, "SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided")
 		return
 	}
@@ -411,8 +427,9 @@ func processPresignedAuth(c *gin.Context) {
 	}
 
 	signingKey := getSigningKey("AWS4"+secret, date, region, service)
-	expectedSignature := hex.EncodeToString(hmacSHA256([]byte(stringToSign), signingKey))
-	if expectedSignature != signatureProvided {
+	expectedSig := hmacSHA256([]byte(stringToSign), signingKey)
+	providedSig, err := hex.DecodeString(signatureProvided)
+	if err != nil || !hmac.Equal(expectedSig, providedSig) {
 		abortWithError(c, http.StatusUnauthorized, "SignatureDoesNotMatch", "The presigned URL signature does not match")
 		return
 	}
