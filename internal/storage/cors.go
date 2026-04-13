@@ -18,6 +18,16 @@ type CORSConfig struct {
 	MaxAge         int      `json:"max_age"`         // Preflight cache duration in seconds
 }
 
+// defaultAdminOrigins lists the browser origins the bundled admin UI ships on
+// out of the box. They are added to every default CORS config so the UI can
+// talk to the S3 API on :9000 without the operator having to hand-edit CORS.
+// Users on custom hosts must add their origin via the CORS page.
+var defaultAdminOrigins = []string{
+	"http://localhost:9001",
+	"http://127.0.0.1:9001",
+	"http://localhost:5173", // Vite dev server
+}
+
 // DefaultCORSConfig returns default CORS settings
 func DefaultCORSConfig() CORSConfig {
 	// Initialize with environment variable if available
@@ -27,7 +37,7 @@ func DefaultCORSConfig() CORSConfig {
 	if envOrigins != "" {
 		origins = strings.Split(envOrigins, ",")
 	} else {
-		origins = []string{"*"} // Default to all origins
+		origins = append([]string{}, defaultAdminOrigins...)
 	}
 
 	return CORSConfig{
