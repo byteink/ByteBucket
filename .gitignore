@@ -55,6 +55,6 @@ tmp
 web/node_modules/
 web/dist/
 web/tsconfig.tsbuildinfo
-internal/webui/dist/*
-!internal/webui/dist/.gitkeep
-!internal/webui/dist/index.html
+# Embed target: we intentionally check the built SPA into the repo so that
+# `go build` / `go test` work without a Node toolchain. Regenerate with
+# `make ui` after web/ changes.
