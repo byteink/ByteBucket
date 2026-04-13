@@ -339,8 +339,8 @@ func TestAuth_Bug3_StaleTimestampStopsBeforeACL(t *testing.T) {
 // signPresignedURL constructs a SigV4 presigned URL. If includeHashInQuery
 // is false, X-Amz-Content-Sha256 is NOT added to the query parameters, but
 // the client nonetheless signs as if payloadHash were the payload hash.
-// This mirrors the real-world scenario in Bug 4.
-func signPresignedURL(t *testing.T, method, target, accessKey, secret, region, service, payloadHash string, includeHashInQuery bool) string {
+// signedHeaders is the ";"-separated list the client commits to.
+func signPresignedURL(t *testing.T, method, target, accessKey, secret, region, service, payloadHash, signedHeaders string, includeHashInQuery bool) string {
 	t.Helper()
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
@@ -356,7 +356,7 @@ func signPresignedURL(t *testing.T, method, target, accessKey, secret, region, s
 	q.Set("X-Amz-Credential", accessKey+"/"+credScope)
 	q.Set("X-Amz-Date", amzDate)
 	q.Set("X-Amz-Expires", "900")
-	q.Set("X-Amz-SignedHeaders", "host")
+	q.Set("X-Amz-SignedHeaders", signedHeaders)
 	if includeHashInQuery {
 		q.Set("X-Amz-Content-Sha256", payloadHash)
 	}
@@ -373,9 +373,18 @@ func signPresignedURL(t *testing.T, method, target, accessKey, secret, region, s
 	sort.Strings(parts)
 	canonicalQuery := strings.Join(parts, "&")
 
-	canonicalHeaders := fmt.Sprintf("host:%s\n", u.Host)
+	var canonicalHeaders string
+	for _, h := range strings.Split(signedHeaders, ";") {
+		h = strings.TrimSpace(strings.ToLower(h))
+		switch h {
+		case "host":
+			canonicalHeaders += fmt.Sprintf("host:%s\n", u.Host)
+		case "x-amz-content-sha256":
+			canonicalHeaders += fmt.Sprintf("x-amz-content-sha256:%s\n", payloadHash)
+		}
+	}
 	canonicalRequest := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s",
-		method, u.EscapedPath(), canonicalQuery, canonicalHeaders, "host", payloadHash)
+		method, u.EscapedPath(), canonicalQuery, canonicalHeaders, signedHeaders, payloadHash)
 
 	stringToSign := fmt.Sprintf("AWS4-HMAC-SHA256\n%s\n%s\n%s",
 		amzDate, credScope, hashSHA256(canonicalRequest))
@@ -386,16 +395,15 @@ func signPresignedURL(t *testing.T, method, target, accessKey, secret, region, s
 	return u.String()
 }
 
-// Bug 4: presigned URL where client signed with "UNSIGNED-PAYLOAD" but did
-// not include X-Amz-Content-Sha256 in the query. The old server silently
-// defaulted to "UNSIGNED-PAYLOAD", producing a match. The fix uses the
-// literal (empty) query value and the signature must therefore fail.
+// Bug 4: client SIGNED x-amz-content-sha256 (committed to a concrete value)
+// but omitted it from the query. The server must NOT fabricate a default —
+// doing so would accept a payload hash the client never committed to.
 func TestAuth_Bug4_PresignedDoesNotDefaultPayloadHash(t *testing.T) {
 	ak, secret := setupStorage(t)
 
 	presigned := signPresignedURL(t, http.MethodGet,
 		"http://example.com/test", ak, secret, "us-east-1", "s3",
-		"UNSIGNED-PAYLOAD", false /* do not include in query */)
+		"abc123deadbeef", "host;x-amz-content-sha256", false)
 
 	req := httptest.NewRequest(http.MethodGet, presigned, nil)
 	req.Host = "example.com"
@@ -415,6 +423,31 @@ func TestAuth_Bug4_PresignedDoesNotDefaultPayloadHash(t *testing.T) {
 	}
 }
 
+// Bug 4 (SDK compat): AWS SDK omits x-amz-content-sha256 from both signed
+// headers and query on presigned GETs. Real S3 defaults to UNSIGNED-PAYLOAD
+// in that case; we must match so SDK interop works.
+func TestAuth_Bug4_PresignedSDKStyleNoHashPasses(t *testing.T) {
+	ak, secret := setupStorage(t)
+
+	presigned := signPresignedURL(t, http.MethodGet,
+		"http://example.com/test", ak, secret, "us-east-1", "s3",
+		"UNSIGNED-PAYLOAD", "host", false)
+
+	req := httptest.NewRequest(http.MethodGet, presigned, nil)
+	req.Host = "example.com"
+
+	called := false
+	w := httptest.NewRecorder()
+	buildEngine(&called).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body=%s", w.Code, w.Body.String())
+	}
+	if !called {
+		t.Fatal("handler must run for SDK-style presigned URL")
+	}
+}
+
 // Positive: presigned URL that does include X-Amz-Content-Sha256 in query
 // and signed with that same value must pass.
 func TestAuth_Bug4_PresignedWithHashInQueryPasses(t *testing.T) {
@@ -422,7 +455,7 @@ func TestAuth_Bug4_PresignedWithHashInQueryPasses(t *testing.T) {
 
 	presigned := signPresignedURL(t, http.MethodGet,
 		"http://example.com/test", ak, secret, "us-east-1", "s3",
-		"UNSIGNED-PAYLOAD", true)
+		"UNSIGNED-PAYLOAD", "host", true)
 
 	req := httptest.NewRequest(http.MethodGet, presigned, nil)
 	req.Host = "example.com"

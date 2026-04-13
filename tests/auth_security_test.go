@@ -204,7 +204,7 @@ func TestE2E_Bug3_StaleTimestampRejected(t *testing.T) {
 // buildPresigned constructs a SigV4 presigned URL directly. If
 // includeHashInQuery is false, the client signs assuming payloadHash but
 // does not add X-Amz-Content-Sha256 to the query.
-func buildPresigned(t *testing.T, method, target, accessKey, secret, payloadHash string, includeHashInQuery bool) string {
+func buildPresigned(t *testing.T, method, target, accessKey, secret, payloadHash, signedHeaders string, includeHashInQuery bool) string {
 	t.Helper()
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
@@ -222,7 +222,7 @@ func buildPresigned(t *testing.T, method, target, accessKey, secret, payloadHash
 	q.Set("X-Amz-Credential", accessKey+"/"+credScope)
 	q.Set("X-Amz-Date", amzDate)
 	q.Set("X-Amz-Expires", "900")
-	q.Set("X-Amz-SignedHeaders", "host")
+	q.Set("X-Amz-SignedHeaders", signedHeaders)
 	if includeHashInQuery {
 		q.Set("X-Amz-Content-Sha256", payloadHash)
 	}
@@ -236,9 +236,18 @@ func buildPresigned(t *testing.T, method, target, accessKey, secret, payloadHash
 	}
 	sort.Strings(parts)
 	canonicalQuery := strings.Join(parts, "&")
-	canonicalHeaders := fmt.Sprintf("host:%s\n", u.Host)
+	var canonicalHeaders string
+	for _, h := range strings.Split(signedHeaders, ";") {
+		h = strings.TrimSpace(strings.ToLower(h))
+		switch h {
+		case "host":
+			canonicalHeaders += fmt.Sprintf("host:%s\n", u.Host)
+		case "x-amz-content-sha256":
+			canonicalHeaders += fmt.Sprintf("x-amz-content-sha256:%s\n", payloadHash)
+		}
+	}
 	canonicalRequest := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s",
-		method, u.EscapedPath(), canonicalQuery, canonicalHeaders, "host", payloadHash)
+		method, u.EscapedPath(), canonicalQuery, canonicalHeaders, signedHeaders, payloadHash)
 	stringToSign := fmt.Sprintf("AWS4-HMAC-SHA256\n%s\n%s\n%s",
 		amzDate, credScope, sha256Hex([]byte(canonicalRequest)))
 	sig := hex.EncodeToString(hmac256(deriveSigningKey(secret, date, region, service), []byte(stringToSign)))
@@ -266,9 +275,11 @@ func TestE2E_Bug4_PresignedNoDefaultPayloadHash(t *testing.T) {
 	}
 
 	target := storageURL + "/" + bucket + "/obj.txt"
+	// Client signs x-amz-content-sha256 with a concrete value but omits it
+	// from the query. Server must not substitute a default.
 	presigned := buildPresigned(t, http.MethodGet, target,
 		adminCreds.AccessKeyID, adminCreds.SecretAccessKey,
-		"UNSIGNED-PAYLOAD", false /* omit from query */)
+		"abc123deadbeef", "host;x-amz-content-sha256", false)
 
 	resp, err := http.Get(presigned)
 	if err != nil {
@@ -281,6 +292,39 @@ func TestE2E_Bug4_PresignedNoDefaultPayloadHash(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "SignatureDoesNotMatch") {
 		t.Fatalf("expected SignatureDoesNotMatch, got %s", body)
+	}
+}
+
+// TestE2E_Bug4_PresignedSDKStyleNoHashPasses: AWS SDK omits
+// x-amz-content-sha256 from both signed headers and query. Server defaults
+// to UNSIGNED-PAYLOAD in that case, matching real S3 behavior.
+func TestE2E_Bug4_PresignedSDKStyleNoHashPasses(t *testing.T) {
+	bucket := fmt.Sprintf("bug4sdk-%d", time.Now().UnixNano())
+	ensureBucket(t, adminCreds.AccessKeyID, adminCreds.SecretAccessKey, bucket)
+	putReq := buildHeaderSigned(t, storageURL, sigV4Request{
+		method: http.MethodPut, path: "/" + bucket + "/obj.txt",
+		body:      []byte("hello"),
+		accessKey: adminCreds.AccessKeyID, secret: adminCreds.SecretAccessKey,
+	})
+	if resp, err := http.DefaultClient.Do(putReq); err != nil {
+		t.Fatalf("seed put: %v", err)
+	} else {
+		_ = resp.Body.Close()
+	}
+
+	target := storageURL + "/" + bucket + "/obj.txt"
+	presigned := buildPresigned(t, http.MethodGet, target,
+		adminCreds.AccessKeyID, adminCreds.SecretAccessKey,
+		"UNSIGNED-PAYLOAD", "host", false)
+
+	resp, err := http.Get(presigned)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
 	}
 }
 

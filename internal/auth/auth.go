@@ -343,11 +343,17 @@ func processPresignedAuth(c *gin.Context) {
 	expires := c.Query("X-Amz-Expires")
 	signatureProvided := c.Query("X-Amz-Signature")
 	signedHeaders := c.Query("X-Amz-SignedHeaders")
-	// Use the exact payload hash from the query. Do NOT substitute a
-	// default: the client's signature was computed over whatever hash they
-	// chose. If the query omits it, the server keeps it empty and the
-	// canonical-request mismatch will surface as SignatureDoesNotMatch.
+	// Payload hash sourcing: use the query param when present. If absent
+	// AND the client did not include x-amz-content-sha256 in SignedHeaders,
+	// fall back to UNSIGNED-PAYLOAD per AWS SigV4 presigned-URL spec — this
+	// is what real S3 does and what the AWS SDK relies on. If the header
+	// WAS signed but the value is missing, leave it empty so the canonical
+	// request mismatches and produces SignatureDoesNotMatch (prevents the
+	// server from fabricating a value the client did not commit to).
 	payloadHash := c.Query("X-Amz-Content-Sha256")
+	if payloadHash == "" && !signedHeadersContains(signedHeaders, "x-amz-content-sha256") {
+		payloadHash = "UNSIGNED-PAYLOAD"
+	}
 
 	if amzAlgorithm == "" || credential == "" || amzDate == "" || expires == "" || signatureProvided == "" || signedHeaders == "" {
 		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Missing required presigned URL query parameters")
@@ -517,6 +523,17 @@ func buildCanonicalHeaders(c *gin.Context, signedHeaders string) (string, error)
 		headerLines = append(headerLines, fmt.Sprintf("%s:%s\n", headerName, value))
 	}
 	return strings.Join(headerLines, ""), nil
+}
+
+// signedHeadersContains reports whether the SignedHeaders list (";"-separated,
+// lowercase by SigV4 convention) includes the given header name.
+func signedHeadersContains(signedHeaders, name string) bool {
+	for _, h := range strings.Split(signedHeaders, ";") {
+		if strings.TrimSpace(strings.ToLower(h)) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // hashSHA256 returns the SHA256 hash of the given data as a hexadecimal string.
