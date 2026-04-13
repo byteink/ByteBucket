@@ -41,10 +41,12 @@ type S3ErrorResponse struct {
 func abortWithError(c *gin.Context, status int, code, message string) {
 	c.Header("Content-Type", "application/xml")
 	c.AbortWithStatus(status)
+	rid, _ := c.Get("requestID")
+	ridStr, _ := rid.(string)
 	c.XML(status, S3ErrorResponse{
 		Code:      code,
 		Message:   message,
-		RequestId: "dummy-request-id",
+		RequestId: ridStr,
 	})
 }
 

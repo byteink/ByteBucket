@@ -4,6 +4,8 @@ import (
 	"encoding/xml"
 	"strings"
 
+	"ByteBucket/internal/middleware"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -31,10 +33,10 @@ func wantsJSON(c *gin.Context) bool {
 
 // respondError writes a protocol-correct error body for the current surface.
 // SigV4 callers get S3 XML (SDKs pattern-match the Code element); admin UI
-// callers get JSON. The RequestId is a fixed placeholder — real request
-// tracing would require a middleware-injected ID, which is out of scope here.
+// callers get JSON. RequestId is pulled from the per-request middleware so
+// an error body and the x-amz-request-id response header agree.
 func respondError(c *gin.Context, status int, code, message string) {
-	body := S3ErrorBody{Code: code, Message: message, RequestId: "dummy-request-id"}
+	body := S3ErrorBody{Code: code, Message: message, RequestId: middleware.RequestID(c)}
 	if wantsJSON(c) {
 		c.AbortWithStatusJSON(status, body)
 		return

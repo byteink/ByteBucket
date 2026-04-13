@@ -328,6 +328,61 @@ func TestE2E_Bug4_PresignedSDKStyleNoHashPasses(t *testing.T) {
 	}
 }
 
+// TestE2E_RequestIDHeaderAndBody: every response carries a non-empty
+// x-amz-request-id header, and error bodies echo the same value in <RequestId>.
+// Exercised via a tampered-signature request so both success (header present)
+// and error-body (RequestId) paths are covered without a bucket dependency.
+func TestE2E_RequestIDHeaderAndBody(t *testing.T) {
+	req := buildHeaderSigned(t, storageURL, sigV4Request{
+		method: http.MethodGet, path: "/",
+		accessKey: adminCreds.AccessKeyID, secret: adminCreds.SecretAccessKey,
+	})
+	// Tamper to force an auth error so the XML body is produced.
+	auth := req.Header.Get("Authorization")
+	last := auth[len(auth)-1]
+	flipped := byte('a')
+	if last == 'a' {
+		flipped = 'b'
+	}
+	req.Header.Set("Authorization", auth[:len(auth)-1]+string(flipped))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+
+	hdr := resp.Header.Get("x-amz-request-id")
+	if hdr == "" {
+		t.Fatalf("missing x-amz-request-id header, body=%s", body)
+	}
+	// The error body must contain the exact same request ID so operators
+	// can correlate a client-visible error with server-side logs.
+	needle := "<RequestId>" + hdr + "</RequestId>"
+	if !strings.Contains(string(body), needle) {
+		t.Fatalf("error body RequestId does not match header %q; body=%s", hdr, body)
+	}
+
+	// Two independent requests must receive distinct IDs.
+	req2 := buildHeaderSigned(t, storageURL, sigV4Request{
+		method: http.MethodGet, path: "/",
+		accessKey: adminCreds.AccessKeyID, secret: adminCreds.SecretAccessKey,
+	})
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("do2: %v", err)
+	}
+	defer func() { _ = resp2.Body.Close() }()
+	hdr2 := resp2.Header.Get("x-amz-request-id")
+	if hdr2 == "" {
+		t.Fatalf("missing x-amz-request-id on 2nd request")
+	}
+	if hdr == hdr2 {
+		t.Fatalf("expected distinct request IDs, got duplicate %q", hdr)
+	}
+}
+
 // TestE2E_Bug1_TamperedSignatureRejected: flip one byte in the signature,
 // expect 401 SignatureDoesNotMatch.
 func TestE2E_Bug1_TamperedSignatureRejected(t *testing.T) {

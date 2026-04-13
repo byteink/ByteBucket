@@ -17,6 +17,10 @@ func NewStorageRouter() *gin.Engine {
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 
+	// Per-request ID runs first so every response — including errors from
+	// downstream middleware (CORS, auth) — carries a correlatable identifier.
+	r.Use(middleware.RequestIDMiddleware())
+
 	// Public health check (no authentication required).
 	r.GET("/health", handlers.HealthHandler)
 

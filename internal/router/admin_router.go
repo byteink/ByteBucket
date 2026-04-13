@@ -3,6 +3,7 @@ package router
 import (
 	"ByteBucket/internal/auth"
 	"ByteBucket/internal/handlers"
+	"ByteBucket/internal/middleware"
 	"ByteBucket/internal/webui"
 
 	"github.com/gin-gonic/gin"
@@ -19,6 +20,10 @@ func NewAdminRouter() *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
+
+	// Per-request ID runs before auth so 401/403 responses from the admin
+	// middleware carry a correlatable identifier, matching the SigV4 surface.
+	r.Use(middleware.RequestIDMiddleware())
 
 	// Public health check.
 	r.GET("/health", handlers.HealthHandler)

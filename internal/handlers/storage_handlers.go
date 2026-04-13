@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"ByteBucket/internal/middleware"
+
 	"github.com/goccy/go-json"
 
 	"github.com/gin-gonic/gin"
@@ -62,7 +64,7 @@ func CreateBucketHandler(c *gin.Context) {
 			Code:       "BucketAlreadyOwnedByYou",
 			Message:    "Your previous request to create the named bucket succeeded and you already own it.",
 			BucketName: bucketName,
-			RequestId:  "dummy-request-id",
+			RequestId:  middleware.RequestID(c),
 		})
 		return
 	}
