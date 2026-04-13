@@ -201,6 +201,89 @@ func TestE2E_Bug3_StaleTimestampRejected(t *testing.T) {
 	}
 }
 
+// buildPresigned constructs a SigV4 presigned URL directly. If
+// includeHashInQuery is false, the client signs assuming payloadHash but
+// does not add X-Amz-Content-Sha256 to the query.
+func buildPresigned(t *testing.T, method, target, accessKey, secret, payloadHash string, includeHashInQuery bool) string {
+	t.Helper()
+	now := time.Now().UTC()
+	amzDate := now.Format("20060102T150405Z")
+	date := amzDate[:8]
+	region := "us-east-1"
+	service := "s3"
+
+	u, err := url.Parse(target)
+	if err != nil {
+		t.Fatalf("url: %v", err)
+	}
+	credScope := fmt.Sprintf("%s/%s/%s/aws4_request", date, region, service)
+	q := u.Query()
+	q.Set("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
+	q.Set("X-Amz-Credential", accessKey+"/"+credScope)
+	q.Set("X-Amz-Date", amzDate)
+	q.Set("X-Amz-Expires", "900")
+	q.Set("X-Amz-SignedHeaders", "host")
+	if includeHashInQuery {
+		q.Set("X-Amz-Content-Sha256", payloadHash)
+	}
+	u.RawQuery = q.Encode()
+
+	var parts []string
+	for k, vs := range u.Query() {
+		for _, v := range vs {
+			parts = append(parts, url.QueryEscape(k)+"="+url.QueryEscape(v))
+		}
+	}
+	sort.Strings(parts)
+	canonicalQuery := strings.Join(parts, "&")
+	canonicalHeaders := fmt.Sprintf("host:%s\n", u.Host)
+	canonicalRequest := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s",
+		method, u.EscapedPath(), canonicalQuery, canonicalHeaders, "host", payloadHash)
+	stringToSign := fmt.Sprintf("AWS4-HMAC-SHA256\n%s\n%s\n%s",
+		amzDate, credScope, sha256Hex([]byte(canonicalRequest)))
+	sig := hex.EncodeToString(hmac256(deriveSigningKey(secret, date, region, service), []byte(stringToSign)))
+	q.Set("X-Amz-Signature", sig)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// TestE2E_Bug4_PresignedNoDefaultPayloadHash: client signs with
+// UNSIGNED-PAYLOAD but omits it from the query. Server must not fabricate
+// the value; signature must fail.
+func TestE2E_Bug4_PresignedNoDefaultPayloadHash(t *testing.T) {
+	bucket := fmt.Sprintf("bug4-%d", time.Now().UnixNano())
+	ensureBucket(t, adminCreds.AccessKeyID, adminCreds.SecretAccessKey, bucket)
+	// Upload a small object so GET would normally succeed.
+	putReq := buildHeaderSigned(t, storageURL, sigV4Request{
+		method: http.MethodPut, path: "/" + bucket + "/obj.txt",
+		body:      []byte("x"),
+		accessKey: adminCreds.AccessKeyID, secret: adminCreds.SecretAccessKey,
+	})
+	if resp, err := http.DefaultClient.Do(putReq); err != nil {
+		t.Fatalf("seed put: %v", err)
+	} else {
+		_ = resp.Body.Close()
+	}
+
+	target := storageURL + "/" + bucket + "/obj.txt"
+	presigned := buildPresigned(t, http.MethodGet, target,
+		adminCreds.AccessKeyID, adminCreds.SecretAccessKey,
+		"UNSIGNED-PAYLOAD", false /* omit from query */)
+
+	resp, err := http.Get(presigned)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 SignatureDoesNotMatch, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "SignatureDoesNotMatch") {
+		t.Fatalf("expected SignatureDoesNotMatch, got %s", body)
+	}
+}
+
 // TestE2E_Bug1_TamperedSignatureRejected: flip one byte in the signature,
 // expect 401 SignatureDoesNotMatch.
 func TestE2E_Bug1_TamperedSignatureRejected(t *testing.T) {

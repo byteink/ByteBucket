@@ -362,11 +362,11 @@ func processPresignedAuth(c *gin.Context) {
 	expires := c.Query("X-Amz-Expires")
 	signatureProvided := c.Query("X-Amz-Signature")
 	signedHeaders := c.Query("X-Amz-SignedHeaders")
+	// Use the exact payload hash from the query. Do NOT substitute a
+	// default: the client's signature was computed over whatever hash they
+	// chose. If the query omits it, the server keeps it empty and the
+	// canonical-request mismatch will surface as SignatureDoesNotMatch.
 	payloadHash := c.Query("X-Amz-Content-Sha256")
-	// Note: Some presigned URLs use "UNSIGNED-PAYLOAD" for payload hash.
-	if payloadHash == "" {
-		payloadHash = "UNSIGNED-PAYLOAD"
-	}
 
 	if amzAlgorithm == "" || credential == "" || amzDate == "" || expires == "" || signatureProvided == "" || signedHeaders == "" {
 		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Missing required presigned URL query parameters")
