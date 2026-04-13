@@ -1,6 +1,8 @@
 package router
 
 import (
+	"net/http"
+
 	"ByteBucket/internal/handlers"
 
 	"github.com/gin-gonic/gin"
@@ -19,15 +21,18 @@ func RegisterStorageRoutes(g gin.IRouter) {
 	// Gin's RedirectTrailingSlash handles the no-slash admin form.
 	g.GET("/", handlers.ListBucketsHandler)
 
-	// Bucket-level operations.
-	g.PUT("/:bucket", handlers.CreateBucketHandler)
-	g.GET("/:bucket", handlers.ListObjectsHandler)
-	g.DELETE("/:bucket", handlers.DeleteBucketHandler)
+	// Bucket-level operations. PUT/GET/DELETE /:bucket dispatches to the
+	// per-bucket CORS subresource handlers when "?cors" is present; this
+	// preserves the S3 wire shape where subresources live on the query
+	// string rather than as distinct path segments.
+	g.PUT("/:bucket", dispatchBucketSubresource(handlers.CreateBucketHandler, http.MethodPut))
+	g.GET("/:bucket", dispatchBucketSubresource(handlers.ListObjectsHandler, http.MethodGet))
+	g.DELETE("/:bucket", dispatchBucketSubresource(handlers.DeleteBucketHandler, http.MethodDelete))
 	g.HEAD("/:bucket", handlers.HeadBucketHandler)
 
-	// Object-level operations. Because Gin's routing does not split on "/" for
-	// wildcard paths, an empty object key (trailing slash on /:bucket/) has
-	// historically been treated as a bucket-level operation; keep that.
+	// Object-level operations. Because Gin's routing does not split on "/"
+	// for wildcard paths, an empty object key (trailing slash on /:bucket/)
+	// has historically been treated as a bucket-level operation; keep that.
 	g.PUT("/:bucket/*objectKey", func(c *gin.Context) {
 		objectKey := c.Param("objectKey")
 		if objectKey == "" || objectKey == "/" {
@@ -46,4 +51,26 @@ func RegisterStorageRoutes(g gin.IRouter) {
 		}
 		handlers.GetObjectMetadataHandler(c)
 	})
+}
+
+// dispatchBucketSubresource picks between the default bucket handler and a
+// subresource handler based on query parameters. Today only ?cors is
+// recognised; ?acl, ?policy, ?lifecycle, etc. fall through to the default
+// handler. Adding a new subresource means one more case here, nothing else.
+func dispatchBucketSubresource(defaultHandler gin.HandlerFunc, method string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		q := c.Request.URL.Query()
+		if _, ok := q["cors"]; ok {
+			switch method {
+			case http.MethodPut:
+				handlers.PutBucketCORSHandler(c)
+			case http.MethodGet:
+				handlers.GetBucketCORSHandler(c)
+			case http.MethodDelete:
+				handlers.DeleteBucketCORSHandler(c)
+			}
+			return
+		}
+		defaultHandler(c)
+	}
 }
