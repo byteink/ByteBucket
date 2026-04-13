@@ -280,8 +280,6 @@ func isUserAllowed(user *storage.User, method, bucket string) bool {
 }
 
 func getActionFromMethod(method, bucket string) string {
-	fmt.Printf("[DEBUG AUTH] Method: %s, Bucket: %s\n", method, bucket)
-
 	switch method {
 	case http.MethodGet:
 		if bucket == "" {
@@ -292,20 +290,15 @@ func getActionFromMethod(method, bucket string) string {
 		if bucket == "" {
 			return "s3:ListBuckets"
 		}
-		// For HEAD requests to buckets (HeadBucket operation), we should return a bucket-level permission
-		// We need to add a special case for this
-		fmt.Printf("[DEBUG AUTH] Processing HEAD request for bucket: %s\n", bucket)
-		// We treat HEAD bucket as a list bucket permission or any object permission on this bucket
-		return "s3:ListBucket" // Changed from "s3:HeadBucket" for better compatibility
+		// Treat HEAD bucket as a list-bucket permission for SDK compatibility.
+		return "s3:ListBucket"
 	case http.MethodPut:
 		if bucket != "" && !strings.Contains(bucket, "/") {
-			fmt.Printf("[DEBUG AUTH] Treating as PutBucket operation for bucket: %s\n", bucket)
 			return "s3:CreateBucket"
 		}
 		return "s3:PutObject"
 	case http.MethodDelete:
 		if bucket != "" && !strings.Contains(bucket, "/") {
-			fmt.Printf("[DEBUG AUTH] Treating as DeleteBucket operation for bucket: %s\n", bucket)
 			return "s3:DeleteBucket"
 		}
 		return "s3:DeleteObject"
@@ -324,32 +317,20 @@ func isBucketAllowed(buckets []string, bucket string) bool {
 }
 
 func isActionAllowed(actions []string, action string) bool {
-	fmt.Printf("[DEBUG AUTH] Checking if action %s is allowed among: %v\n", action, actions)
-
-	// Special handling for bucket operations - If the user has broader permissions, they should have access to the more specific ones
-	// s3:ListBucket permissions should allow s3:HeadBucket
-	// s3:* permission should allow anything
-
-	// Check if the action is directly allowed
+	// Direct match (including wildcard).
 	for _, a := range actions {
 		if a == "*" || a == action {
-			fmt.Printf("[DEBUG AUTH] Action %s directly allowed by %s\n", action, a)
 			return true
 		}
 	}
-
-	// Special case mappings for implied permissions
+	// Any object-level permission implies ListBucket so HeadBucket works.
 	if action == "s3:ListBucket" {
 		for _, a := range actions {
 			if a == "s3:GetObject" || a == "s3:PutObject" || a == "s3:DeleteObject" {
-				fmt.Printf("[DEBUG AUTH] ListBucket allowed due to object permission: %s\n", a)
 				return true
 			}
 		}
 	}
-
-	// Default deny
-	fmt.Printf("[DEBUG AUTH] Action %s not allowed\n", action)
 	return false
 }
 
