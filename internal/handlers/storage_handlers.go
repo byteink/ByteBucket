@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"crypto/md5"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/xml"
 	"fmt"
+	"hash"
 	"hash/crc32"
 	"io"
 	"net/http"
@@ -20,6 +23,79 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// etagMetaKey is the metadata-sidecar key under which the S3 ETag is stored.
+// Stored WITH the enclosing double quotes so every read path (GET, HEAD, LIST)
+// can return it verbatim without re-quoting. S3's wire format for ETag is
+// a quoted hex string; matching that here avoids a subtle mismatch between
+// the response header and the XML listing.
+const etagMetaKey = "ETag"
+
+// computeFileETag reads a file from disk and returns its ETag value in S3
+// wire format (hex md5, wrapped in double quotes). Used for the one-time
+// migration path: legacy objects written before ETag persistence landed have
+// no sidecar value and must be rebuilt lazily on first read.
+func computeFileETag(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return formatETag(h), nil
+}
+
+// formatETag returns the S3-wire-format ETag for a completed hasher: the
+// hex digest wrapped in double quotes. AWS SDKs match on the literal quoted
+// form, so the quotes are load-bearing.
+func formatETag(h hash.Hash) string {
+	return "\"" + hex.EncodeToString(h.Sum(nil)) + "\""
+}
+
+// loadOrBackfillETag reads the ETag for an on-disk object. If the metadata
+// sidecar is missing or lacks an ETag (legacy objects written before ETag
+// persistence), the MD5 is recomputed from the file and persisted so the
+// next read is O(metadata). The small IO cost is paid once per legacy
+// object; we accept it over a full offline migration step.
+func loadOrBackfillETag(objectPath string) (string, error) {
+	metadataPath := objectPath + ".meta"
+
+	var metadata map[string]string
+	if data, err := os.ReadFile(metadataPath); err == nil {
+		if err := json.Unmarshal(data, &metadata); err != nil {
+			return "", err
+		}
+		if tag, ok := metadata[etagMetaKey]; ok && tag != "" {
+			return tag, nil
+		}
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+
+	tag, err := computeFileETag(objectPath)
+	if err != nil {
+		return "", err
+	}
+	if metadata == nil {
+		metadata = make(map[string]string, 1)
+	}
+	metadata[etagMetaKey] = tag
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		return "", err
+	}
+	// Best-effort persistence: a write failure must not mask the ETag from
+	// the caller. The legacy object remains correct; the next read will
+	// retry the backfill. No hidden error swallowing — the operator sees
+	// it in the next failed write.
+	if err := os.WriteFile(metadataPath, raw, 0644); err != nil {
+		return tag, nil
+	}
+	return tag, nil
+}
 
 // HealthHandler returns a simple JSON status.
 func HealthHandler(c *gin.Context) {
@@ -206,9 +282,12 @@ func UploadObjectHandler(c *gin.Context) {
 		return
 	}
 	// Close explicitly after streaming so an fsync/close failure surfaces as a
-	// 500 rather than being swallowed by a deferred close.
-	hasher := crc32.NewIEEE()
-	multiWriter := io.MultiWriter(f, hasher)
+	// 500 rather than being swallowed by a deferred close. The MD5 hasher is
+	// fed by the same MultiWriter as the CRC32 so we compute the S3 ETag in
+	// one pass without re-reading the file from disk.
+	crcHasher := crc32.NewIEEE()
+	md5Hasher := md5.New()
+	multiWriter := io.MultiWriter(f, crcHasher, md5Hasher)
 	if _, err := io.Copy(multiWriter, c.Request.Body); err != nil {
 		_ = f.Close()
 		respondError(c, http.StatusInternalServerError, "InternalError", "Error saving file")
@@ -220,8 +299,9 @@ func UploadObjectHandler(c *gin.Context) {
 	}
 
 	checksumBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(checksumBytes, hasher.Sum32())
+	binary.BigEndian.PutUint32(checksumBytes, crcHasher.Sum32())
 	checksumBase64 := base64.StdEncoding.EncodeToString(checksumBytes)
+	etag := formatETag(md5Hasher)
 
 	metadata := make(map[string]string)
 	for key, values := range c.Request.Header {
@@ -230,6 +310,7 @@ func UploadObjectHandler(c *gin.Context) {
 		}
 	}
 	metadata["x-amz-checksum-crc32"] = checksumBase64
+	metadata[etagMetaKey] = etag
 
 	metadataPath := dstPath + ".meta"
 	metadataJSON, err := json.Marshal(metadata)
@@ -242,7 +323,10 @@ func UploadObjectHandler(c *gin.Context) {
 		return
 	}
 
-	c.Status(http.StatusNoContent)
+	// ETag is part of the S3 PutObject response contract; SDKs read it and
+	// optionally verify against a client-side Content-MD5.
+	c.Header("ETag", etag)
+	c.Status(http.StatusOK)
 }
 
 // ListObjectsHandler lists objects in a bucket.
@@ -277,10 +361,19 @@ func ListObjectsHandler(c *gin.Context) {
 		if err != nil {
 			continue
 		}
+		// Resolve the per-object ETag from its sidecar. A backfill kicks in
+		// for legacy objects that predate ETag persistence so the listing is
+		// self-healing rather than returning an empty or stale value.
+		etag, err := loadOrBackfillETag(filepath.Join(bucketPath, name))
+		if err != nil {
+			respondError(c, http.StatusInternalServerError, "InternalError",
+				fmt.Sprintf("Error resolving ETag for %s: %v", name, err))
+			return
+		}
 		objects = append(objects, ObjectInfo{
 			Key:          name,
 			LastModified: info.ModTime().Format(time.RFC3339),
-			ETag:         "\"dummy-etag\"",
+			ETag:         etag,
 			Size:         info.Size(),
 			StorageClass: "STANDARD",
 		})
@@ -328,6 +421,14 @@ func DownloadObjectHandler(c *gin.Context) {
 		return
 	}
 
+	// Backfill the ETag before emitting headers so legacy objects — written
+	// before ETag persistence — still return a correct, wire-shaped value.
+	etag, err := loadOrBackfillETag(filePath)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "InternalError", "Error resolving ETag")
+		return
+	}
+
 	metadataPath := filePath + ".meta"
 	if stat, err := os.Stat(metadataPath); err == nil && !stat.IsDir() {
 		if data, err := os.ReadFile(metadataPath); err == nil {
@@ -337,6 +438,9 @@ func DownloadObjectHandler(c *gin.Context) {
 			}
 		}
 	}
+	// Always emit the canonical ETag; applyMetadataHeaders may have written
+	// nothing for pre-migration objects whose sidecar lacked the key.
+	c.Header("ETag", etag)
 
 	c.File(filePath)
 }
@@ -432,7 +536,8 @@ func GetObjectMetadataHandler(c *gin.Context) {
 	objectKey := c.Param("objectKey")
 	objectKey = filepath.Clean(objectKey)
 
-	metadataPath := filepath.Join(objectsRoot, bucketName, objectKey+".meta")
+	objectPath := filepath.Join(objectsRoot, bucketName, objectKey)
+	metadataPath := objectPath + ".meta"
 
 	if _, err := os.Stat(metadataPath); os.IsNotExist(err) {
 		respondError(c, http.StatusNotFound, "NoSuchKey", "Metadata not found")
@@ -449,6 +554,17 @@ func GetObjectMetadataHandler(c *gin.Context) {
 	if err := json.Unmarshal(data, &metadata); err != nil {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Error decoding metadata")
 		return
+	}
+
+	// Backfill the ETag in-place so HEAD responses and the JSON body always
+	// include it, even for objects predating ETag persistence.
+	if tag := metadata[etagMetaKey]; tag == "" {
+		backfilled, err := loadOrBackfillETag(objectPath)
+		if err != nil {
+			respondError(c, http.StatusInternalServerError, "InternalError", "Error resolving ETag")
+			return
+		}
+		metadata[etagMetaKey] = backfilled
 	}
 
 	if c.Request.Method == http.MethodHead {

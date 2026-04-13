@@ -3,8 +3,10 @@ package tests
 import (
 	"bytes"
 	"crypto/hmac"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -410,5 +412,123 @@ func TestE2E_Bug1_TamperedSignatureRejected(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "SignatureDoesNotMatch") {
 		t.Fatalf("expected SignatureDoesNotMatch, got %s", body)
+	}
+}
+
+// TestE2E_ETagRoundTrip: PUT random bytes and verify GET, HEAD and LIST
+// all return the hex-MD5 of the uploaded bytes, wrapped in double quotes.
+// Also confirms the owner in ListBuckets is the authenticated access key
+// (replacing the old dummy-owner placeholder).
+func TestE2E_ETagRoundTrip(t *testing.T) {
+	bucket := fmt.Sprintf("etag-e2e-%d", time.Now().UnixNano())
+	ensureBucket(t, adminCreds.AccessKeyID, adminCreds.SecretAccessKey, bucket)
+
+	body := []byte(fmt.Sprintf("payload-%d-%s", time.Now().UnixNano(),
+		strings.Repeat("x", 37)))
+	sum := md5.Sum(body)
+	wantETag := "\"" + hex.EncodeToString(sum[:]) + "\""
+
+	// Use a top-level key; ListObjectsHandler only walks direct bucket
+	// entries and skips subdirectories, matching existing behaviour.
+	key := "obj.bin"
+
+	// PUT
+	putReq := buildHeaderSigned(t, storageURL, sigV4Request{
+		method: http.MethodPut, path: "/" + bucket + "/" + key,
+		body:      body,
+		accessKey: adminCreds.AccessKeyID, secret: adminCreds.SecretAccessKey,
+	})
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	_ = putResp.Body.Close()
+	if putResp.StatusCode/100 != 2 {
+		t.Fatalf("PUT status = %d", putResp.StatusCode)
+	}
+	if got := putResp.Header.Get("ETag"); got != wantETag {
+		t.Fatalf("PUT ETag = %q; want %q", got, wantETag)
+	}
+
+	// GET
+	getReq := buildHeaderSigned(t, storageURL, sigV4Request{
+		method: http.MethodGet, path: "/" + bucket + "/" + key,
+		accessKey: adminCreds.AccessKeyID, secret: adminCreds.SecretAccessKey,
+	})
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	got, _ := io.ReadAll(getResp.Body)
+	_ = getResp.Body.Close()
+	if !bytes.Equal(got, body) {
+		t.Fatalf("GET body mismatch")
+	}
+	if e := getResp.Header.Get("ETag"); e != wantETag {
+		t.Fatalf("GET ETag = %q; want %q", e, wantETag)
+	}
+
+	// HEAD
+	headReq := buildHeaderSigned(t, storageURL, sigV4Request{
+		method: http.MethodHead, path: "/" + bucket + "/" + key,
+		accessKey: adminCreds.AccessKeyID, secret: adminCreds.SecretAccessKey,
+	})
+	headResp, err := http.DefaultClient.Do(headReq)
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	_ = headResp.Body.Close()
+	if e := headResp.Header.Get("ETag"); e != wantETag {
+		t.Fatalf("HEAD ETag = %q; want %q", e, wantETag)
+	}
+
+	// LIST
+	listReq := buildHeaderSigned(t, storageURL, sigV4Request{
+		method: http.MethodGet, path: "/" + bucket,
+		accessKey: adminCreds.AccessKeyID, secret: adminCreds.SecretAccessKey,
+	})
+	listResp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	listBody, _ := io.ReadAll(listResp.Body)
+	_ = listResp.Body.Close()
+	var lbr struct {
+		Contents []struct {
+			Key  string `xml:"Key"`
+			ETag string `xml:"ETag"`
+		} `xml:"Contents"`
+	}
+	if err := xml.Unmarshal(listBody, &lbr); err != nil {
+		t.Fatalf("list parse: %v; body=%s", err, listBody)
+	}
+	found := false
+	for _, o := range lbr.Contents {
+		if strings.HasSuffix(o.Key, "obj.bin") && o.ETag == wantETag {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("LIST missing entry with ETag %q; status=%d body=%s", wantETag, listResp.StatusCode, listBody)
+	}
+
+	// ListBuckets owner must be the authenticated access key, not a placeholder.
+	lbReq := buildHeaderSigned(t, storageURL, sigV4Request{
+		method: http.MethodGet, path: "/",
+		accessKey: adminCreds.AccessKeyID, secret: adminCreds.SecretAccessKey,
+	})
+	lbResp, err := http.DefaultClient.Do(lbReq)
+	if err != nil {
+		t.Fatalf("listBuckets: %v", err)
+	}
+	lbBody, _ := io.ReadAll(lbResp.Body)
+	_ = lbResp.Body.Close()
+	if strings.Contains(string(lbBody), "dummy-owner") {
+		t.Fatalf("ListBuckets response still contains placeholder owner: %s", lbBody)
+	}
+	if !strings.Contains(string(lbBody), adminCreds.AccessKeyID) {
+		t.Fatalf("ListBuckets response missing authenticated owner %q: %s",
+			adminCreds.AccessKeyID, lbBody)
 	}
 }
