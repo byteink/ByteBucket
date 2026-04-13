@@ -1,14 +1,14 @@
 import { FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { defaultStorageEndpoint, saveSession } from '../lib/session';
+import { saveSession } from '../lib/session';
 import { checkAdminAuth } from '../lib/admin';
-import { makeS3Client, probeS3 } from '../lib/s3';
 
+// LoginPage collects admin credentials. There is no separate storage endpoint
+// any more: the UI and the storage API are same-origin on the admin port.
 export default function LoginPage() {
   const navigate = useNavigate();
   const [accessKey, setAccessKey] = useState('');
   const [secret, setSecret] = useState('');
-  const [endpoint, setEndpoint] = useState(defaultStorageEndpoint());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -18,21 +18,12 @@ export default function LoginPage() {
     setError(null);
     setBusy(true);
     try {
-      const session = { accessKey, secret, storageEndpoint: endpoint };
-
+      const session = { accessKey, secret };
       const adminErr = await checkAdminAuth(session);
       if (adminErr) {
         setError(adminErr);
         return;
       }
-
-      const s3 = makeS3Client(session);
-      const probe = await probeS3(s3);
-      if (!probe.ok) {
-        setError(probe.message ?? 'S3 probe failed');
-        return;
-      }
-
       saveSession(session);
       navigate('/buckets', { replace: true });
     } finally {
@@ -65,16 +56,6 @@ export default function LoginPage() {
               autoComplete="current-password"
               value={secret}
               onChange={(e) => setSecret(e.target.value)}
-              required
-            />
-          </div>
-          <div>
-            <label className="field-label" htmlFor="ep">S3 endpoint</label>
-            <input
-              id="ep"
-              className="input font-mono"
-              value={endpoint}
-              onChange={(e) => setEndpoint(e.target.value)}
               required
             />
           </div>

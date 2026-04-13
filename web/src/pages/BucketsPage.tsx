@@ -1,12 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import {
-  CreateBucketCommand,
-  DeleteBucketCommand,
-  ListBucketsCommand,
-} from '@aws-sdk/client-s3';
+import { createBucket, deleteBucket, listBuckets } from '../lib/s3';
 import { loadSession } from '../lib/session';
-import { makeS3Client } from '../lib/s3';
 
 interface BucketRow {
   name: string;
@@ -23,13 +18,15 @@ export default function BucketsPage() {
     if (!session) return;
     setError(null);
     try {
-      const client = makeS3Client(session);
-      const res = await client.send(new ListBucketsCommand({}));
-      const list = (res.Buckets ?? []).map((b) => ({
-        name: b.Name ?? '',
-        created: b.CreationDate ? new Date(b.CreationDate).toISOString().slice(0, 10) : undefined,
-      }));
-      setBuckets(list);
+      const list = await listBuckets(session);
+      setBuckets(
+        list.map((b) => ({
+          name: b.name,
+          created: b.creationDate
+            ? new Date(b.creationDate).toISOString().slice(0, 10)
+            : undefined,
+        })),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -43,8 +40,7 @@ export default function BucketsPage() {
   async function onCreate() {
     if (!session || !newName.trim()) return;
     try {
-      const client = makeS3Client(session);
-      await client.send(new CreateBucketCommand({ Bucket: newName.trim() }));
+      await createBucket(session, newName.trim());
       setNewName('');
       await refresh();
     } catch (e) {
@@ -56,8 +52,7 @@ export default function BucketsPage() {
     if (!session) return;
     if (!window.confirm(`Delete bucket ${name}? It must be empty.`)) return;
     try {
-      const client = makeS3Client(session);
-      await client.send(new DeleteBucketCommand({ Bucket: name }));
+      await deleteBucket(session, name);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -93,7 +88,7 @@ export default function BucketsPage() {
             <tr className="text-left border-b border-ink-200 text-ink-500">
               <th className="table-cell font-normal">Name</th>
               <th className="table-cell font-normal">Created</th>
-              <th className="table-cell font-normal w-24"></th>
+              <th className="table-cell font-normal w-56"></th>
             </tr>
           </thead>
           <tbody>
@@ -104,8 +99,14 @@ export default function BucketsPage() {
                     {b.name}
                   </Link>
                 </td>
-                <td className="table-cell text-xs text-ink-500">{b.created ?? '—'}</td>
+                <td className="table-cell text-xs text-ink-500">{b.created ?? '-'}</td>
                 <td className="table-cell text-right">
+                  <Link
+                    to={`/buckets/${encodeURIComponent(b.name)}/cors`}
+                    className="btn h-7 px-2 text-xs mr-2 inline-flex items-center"
+                  >
+                    CORS
+                  </Link>
                   <button className="btn-danger h-7 px-2 text-xs" onClick={() => onDelete(b.name)}>
                     Delete
                   </button>

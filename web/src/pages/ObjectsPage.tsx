@@ -1,14 +1,7 @@
 import { ChangeEvent, DragEvent, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import {
-  DeleteObjectCommand,
-  GetObjectCommand,
-  ListObjectsV2Command,
-  PutObjectCommand,
-} from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { deleteObject, getObject, listObjects, putObject } from '../lib/s3';
 import { loadSession } from '../lib/session';
-import { makeS3Client } from '../lib/s3';
 
 interface ObjectRow {
   key: string;
@@ -28,14 +21,14 @@ export default function ObjectsPage() {
     if (!session || !bucket) return;
     setError(null);
     try {
-      const client = makeS3Client(session);
-      const res = await client.send(new ListObjectsV2Command({ Bucket: bucket }));
-      const list = (res.Contents ?? []).map((o) => ({
-        key: o.Key ?? '',
-        size: o.Size ?? 0,
-        modified: o.LastModified ? new Date(o.LastModified).toISOString() : undefined,
-      }));
-      setRows(list);
+      const list = await listObjects(session, bucket);
+      setRows(
+        list.map((o) => ({
+          key: o.key,
+          size: o.size,
+          modified: o.lastModified ? new Date(o.lastModified).toISOString() : undefined,
+        })),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -48,18 +41,9 @@ export default function ObjectsPage() {
 
   async function uploadFiles(files: FileList | File[]) {
     if (!session || !bucket) return;
-    const client = makeS3Client(session);
     try {
       for (const file of Array.from(files)) {
-        const body = new Uint8Array(await file.arrayBuffer());
-        await client.send(
-          new PutObjectCommand({
-            Bucket: bucket,
-            Key: file.name,
-            Body: body,
-            ContentType: file.type || 'application/octet-stream',
-          })
-        );
+        await putObject(session, bucket, file.name, file);
       }
       await refresh();
     } catch (e) {
@@ -70,13 +54,18 @@ export default function ObjectsPage() {
   async function onDownload(key: string) {
     if (!session || !bucket) return;
     try {
-      const client = makeS3Client(session);
-      const url = await getSignedUrl(
-        client,
-        new GetObjectCommand({ Bucket: bucket, Key: key }),
-        { expiresIn: 300 }
-      );
-      window.open(url, '_blank', 'noopener');
+      const blob = await getObject(session, bucket, key);
+      // Trigger a download via an ephemeral object URL. Revoke immediately
+      // after click so the blob can be GC'd; browsers keep the download alive
+      // through the Blob reference held by the download dialog.
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = key.split('/').pop() ?? key;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -86,8 +75,7 @@ export default function ObjectsPage() {
     if (!session || !bucket) return;
     if (!window.confirm(`Delete ${key}?`)) return;
     try {
-      const client = makeS3Client(session);
-      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+      await deleteObject(session, bucket, key);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -155,7 +143,7 @@ export default function ObjectsPage() {
               <tr key={o.key} className="border-b border-ink-100">
                 <td className="table-cell font-mono text-xs break-all">{o.key}</td>
                 <td className="table-cell text-xs text-ink-500">{formatSize(o.size)}</td>
-                <td className="table-cell text-xs text-ink-500">{o.modified ?? '—'}</td>
+                <td className="table-cell text-xs text-ink-500">{o.modified ?? '-'}</td>
                 <td className="table-cell text-right">
                   <button className="btn h-7 px-2 text-xs mr-2" onClick={() => onDownload(o.key)}>
                     Download

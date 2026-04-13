@@ -18,14 +18,6 @@ export interface CreatedUser extends User {
   secretAccessKey: string;
 }
 
-export interface CORSConfig {
-  allowed_origins: string[];
-  allowed_methods: string[];
-  allowed_headers: string[];
-  expose_headers: string[];
-  max_age: number;
-}
-
 function authHeaders(s: Session): HeadersInit {
   return {
     'X-Admin-AccessKey': s.accessKey,
@@ -75,21 +67,6 @@ export async function deleteUser(s: Session, accessKeyID: string): Promise<void>
   const res = await fetch(`/users/${encodeURIComponent(accessKeyID)}`, {
     method: 'DELETE',
     headers: authHeaders(s),
-  });
-  if (!res.ok) throw new Error(await parseError(res));
-}
-
-export async function getCORS(s: Session): Promise<CORSConfig> {
-  const res = await fetch('/cors', { headers: authHeaders(s) });
-  if (!res.ok) throw new Error(await parseError(res));
-  return (await res.json()) as CORSConfig;
-}
-
-export async function putCORS(s: Session, cfg: CORSConfig): Promise<void> {
-  const res = await fetch('/cors', {
-    method: 'PUT',
-    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
-    body: JSON.stringify(cfg),
   });
   if (!res.ok) throw new Error(await parseError(res));
 }

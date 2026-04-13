@@ -4,8 +4,6 @@ import { clearSession, loadSession } from '../lib/session';
 const navItems = [
   { to: '/buckets', label: 'Buckets' },
   { to: '/users', label: 'Users' },
-  { to: '/cors', label: 'CORS' },
-  { to: '/settings', label: 'Settings' },
 ];
 
 export default function Layout() {
