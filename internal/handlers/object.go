@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 
+	"ByteBucket/internal/middleware"
+
 	"github.com/goccy/go-json"
 
 	"github.com/gin-gonic/gin"
@@ -85,6 +87,11 @@ func UploadObjectHandler(c *gin.Context) {
 		return
 	}
 
+	// Credit the new object's bytes against the bucket gauge. Best-effort
+	// delta — not recomputed at startup — so the value should be treated
+	// as a trendline, not an authoritative size report.
+	middleware.ObjectsBytesTotal.WithLabelValues(bucketName).Add(float64(written))
+
 	// ETag is part of the S3 PutObject response contract; SDKs read it and
 	// optionally verify against a client-side Content-MD5.
 	c.Header("ETag", etag)
@@ -136,10 +143,22 @@ func DeleteObjectHandler(c *gin.Context) {
 	objectKey = filepath.Clean(objectKey)
 	filePath := filepath.Join(objectsRoot, bucketName, objectKey)
 
+	// Capture size before removal so the per-bucket byte gauge can be
+	// decremented symmetrically with UploadObjectHandler's Add. A Stat
+	// error (e.g. concurrent delete) is non-fatal — we simply skip the
+	// gauge update rather than fail the request.
+	var removedBytes int64
+	if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
+		removedBytes = info.Size()
+	}
+
 	err := os.Remove(filePath)
 	if err != nil && !os.IsNotExist(err) {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Error deleting object")
 		return
+	}
+	if removedBytes > 0 {
+		middleware.ObjectsBytesTotal.WithLabelValues(bucketName).Sub(float64(removedBytes))
 	}
 
 	// Best-effort metadata sidecar cleanup; a missing sidecar is not an error.

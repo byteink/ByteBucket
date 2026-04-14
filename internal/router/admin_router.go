@@ -29,9 +29,18 @@ func NewAdminRouter() *gin.Engine {
 	// handler writes at the end of the chain, so placement only affects
 	// what the logger can see in the Gin context.
 	r.Use(middleware.Log())
+	r.Use(middleware.Metrics())
 
 	// Public health check.
 	r.GET("/health", handlers.HealthHandler)
+
+	// Prometheus scrape endpoint. Deliberately unauthenticated: standard
+	// Prometheus practice is to expose /metrics on a private network and
+	// rely on network boundaries rather than in-process auth. The admin
+	// port is already documented as non-public in SECURITY.md, so mounting
+	// here is consistent — do NOT ever expose :9001 on the public
+	// internet.
+	r.GET("/metrics", gin.WrapH(middleware.PrometheusHandler()))
 
 	// Authenticated admin API.
 	protected := r.Group("/")

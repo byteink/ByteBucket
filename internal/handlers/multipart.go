@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"ByteBucket/internal/middleware"
 	"ByteBucket/internal/storage"
 
 	"github.com/gin-gonic/gin"
@@ -122,6 +123,10 @@ func CreateMultipartUploadHandler(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Failed to initiate multipart upload")
 		return
 	}
+	// Track live multipart sessions for operators. Paired with matching
+	// decrements on Complete/Abort below; if either path is bypassed the
+	// gauge drifts, which is the correct signal — leaked uploads are a bug.
+	middleware.MultipartUploadsInProgress.Inc()
 	xmlBody := initiateMultipartUploadResult{
 		XMLNS:    s3XMLNS,
 		Bucket:   bucket,
@@ -189,11 +194,16 @@ func CompleteMultipartUploadHandler(c *gin.Context) {
 	for _, p := range req.Parts {
 		expected = append(expected, storage.UploadedPart{PartNumber: p.PartNumber, ETag: p.ETag})
 	}
-	finalETag, _, err := storage.CompleteMultipartUpload(bucket, key, uploadID, expected)
+	finalETag, finalSize, err := storage.CompleteMultipartUpload(bucket, key, uploadID, expected)
 	if err != nil {
 		mapMultipartErr(c, err)
 		return
 	}
+	middleware.MultipartUploadsInProgress.Dec()
+	// Credit the final object bytes on successful completion. Multipart
+	// uploads do not flow through UploadObjectHandler, so the gauge
+	// needs an explicit signal here to stay consistent with single-PUT.
+	middleware.ObjectsBytesTotal.WithLabelValues(bucket).Add(float64(finalSize))
 	xmlBody := completeMultipartUploadResult{
 		XMLNS:    s3XMLNS,
 		Location: "http://" + c.Request.Host + "/" + bucket + "/" + key,
@@ -218,6 +228,7 @@ func AbortMultipartUploadHandler(c *gin.Context) {
 		mapMultipartErr(c, err)
 		return
 	}
+	middleware.MultipartUploadsInProgress.Dec()
 	c.Status(http.StatusNoContent)
 }
 

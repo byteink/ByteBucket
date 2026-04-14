@@ -25,6 +25,10 @@ func NewStorageRouter() *gin.Engine {
 	// and SigV4 rejections — produces one JSON log line.
 	r.Use(middleware.Log())
 
+	// Metrics sits alongside Log so both surfaces observe the same request
+	// envelope. Label cardinality is bounded because path is c.FullPath().
+	r.Use(middleware.Metrics())
+
 	// Public health check (no authentication required).
 	r.GET("/health", handlers.HealthHandler)
 
