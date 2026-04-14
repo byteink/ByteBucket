@@ -31,6 +31,15 @@ function isAdminText(text: string): boolean {
   }
 }
 
+// Go's zero value for time.Time marshals to "0001-01-01T00:00:00Z".
+// Treat anything before 2000 as unknown so legacy users read cleanly.
+function formatCreated(ts?: string): string {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime()) || d.getFullYear() < 2000) return '—';
+  return d.toISOString().slice(0, 10);
+}
+
 export default function UsersPage() {
   const session = loadSession();
   const [users, setUsers] = useState<User[] | null>(null);
@@ -118,6 +127,7 @@ export default function UsersPage() {
               <th className="table-cell font-normal">Access Key ID</th>
               <th className="table-cell font-normal w-20">Role</th>
               <th className="table-cell font-normal">Rules</th>
+              <th className="table-cell font-normal w-40">Created</th>
               <th className="table-cell font-normal w-40"></th>
             </tr>
           </thead>
@@ -129,6 +139,7 @@ export default function UsersPage() {
                   {isAdminACL(u.acl ?? []) ? 'admin' : <span className="text-ink-500">user</span>}
                 </td>
                 <td className="table-cell text-ink-500 text-xs">{(u.acl ?? []).length} rule(s)</td>
+                <td className="table-cell text-ink-500 text-xs font-mono">{formatCreated(u.createdAt)}</td>
                 <td className="table-cell text-right">
                   <button
                     className="btn h-7 px-2 text-xs mr-2"

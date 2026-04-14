@@ -90,6 +90,7 @@ func ListUsersHandler(c *gin.Context) {
 		result = append(result, gin.H{
 			"accessKeyID": u.AccessKeyID,
 			"acl":         u.ACL,
+			"createdAt":   u.CreatedAt,
 		})
 	}
 	c.JSON(http.StatusOK, result)

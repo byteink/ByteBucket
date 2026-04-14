@@ -12,6 +12,10 @@ export interface ACLRule {
 export interface User {
   accessKeyID: string;
   acl: ACLRule[] | null;
+  // RFC3339 timestamp set when the user was first persisted. Users created
+  // before this field existed return the Go zero value (year 0001), which
+  // the UI renders as unknown.
+  createdAt?: string;
 }
 
 export interface CreatedUser extends User {

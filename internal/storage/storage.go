@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/boltdb/bolt"
 )
@@ -125,13 +126,22 @@ type ACLRule struct {
 type User struct {
 	AccessKeyID     string    `json:"accessKeyID"`
 	EncryptedSecret string    `json:"encryptedSecret"`
-	ACL             []ACLRule `json:"acl"` // New ACL field
+	ACL             []ACLRule `json:"acl"`
+	// CreatedAt is populated when a user is first persisted. Pre-existing
+	// records written before this field existed unmarshal to the zero value;
+	// handlers render that as unknown.
+	CreatedAt time.Time `json:"createdAt,omitempty"`
 	// SecretAccessKey is only used temporarily when a user is created.
 	SecretAccessKey string `json:"-"`
 }
 
 // CreateUser stores a new user in BoltDB.
 func CreateUser(user *User) error {
+	// Stamp creation time at a single point so every caller (super-user
+	// bootstrap, admin API, tests) gets the field without having to remember.
+	if user.CreatedAt.IsZero() {
+		user.CreatedAt = time.Now().UTC()
+	}
 	return userDB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("Users"))
 		if b.Get([]byte(user.AccessKeyID)) != nil {
