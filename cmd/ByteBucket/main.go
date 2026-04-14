@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"ByteBucket/internal/middleware"
 	"ByteBucket/internal/router"
 	"ByteBucket/internal/storage"
 )
@@ -42,6 +43,30 @@ const (
 	idleTimeout       = 120 * time.Second
 	maxHeaderBytes    = 1 << 20
 )
+
+// Per-surface request body caps. Enforced by middleware.BodyLimit which emits
+// a protocol-correct 413 EntityTooLarge before the handler can stream the
+// body to disk.
+//
+//   - storageBodyLimit: 5 GiB matches the single-object PUT ceiling AWS S3
+//     itself imposes. Clients uploading larger objects must use multipart
+//     (planned); that path will set its own per-part limit.
+//   - adminBodyLimit: 100 MiB is orders of magnitude above any legitimate
+//     CORS config or user-management payload and exists purely as a
+//     defence-in-depth bound for the admin surface.
+const (
+	storageBodyLimit int64 = 5 << 30
+	adminBodyLimit   int64 = 100 << 20
+)
+
+// withBodyLimit wraps an http.Handler (typically a *gin.Engine) so any request
+// body larger than limit produces a protocol-correct 413 before the handler
+// runs. Applied at the cmd layer because gin.Engine.Use only applies to
+// routes registered after the call; wrapping at the net/http layer sidesteps
+// that ordering hazard and keeps router constructors surface-agnostic.
+func withBodyLimit(h http.Handler, limit int64) http.Handler {
+	return middleware.BodyLimit(h, limit)
+}
 
 // newServer applies the standard per-server bounds. Centralised so the two
 // servers stay in lockstep and a future reviewer sees every timeout in one
@@ -108,8 +133,8 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	storageSrv := newServer(":9000", router.NewStorageRouter())
-	adminSrv := newServer(":9001", router.NewAdminRouter())
+	storageSrv := newServer(":9000", withBodyLimit(router.NewStorageRouter(), storageBodyLimit))
+	adminSrv := newServer(":9001", withBodyLimit(router.NewAdminRouter(), adminBodyLimit))
 	return serve(ctx, storageSrv, adminSrv)
 }
 
