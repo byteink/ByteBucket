@@ -14,12 +14,16 @@ import (
 // middleware and public endpoints.
 func NewStorageRouter() *gin.Engine {
 	r := gin.New()
-	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 
 	// Per-request ID runs first so every response — including errors from
 	// downstream middleware (CORS, auth) — carries a correlatable identifier.
 	r.Use(middleware.RequestIDMiddleware())
+
+	// Structured request log sits immediately after RequestID and before the
+	// CORS/auth middlewares so every response — including preflight denials
+	// and SigV4 rejections — produces one JSON log line.
+	r.Use(middleware.Log())
 
 	// Public health check (no authentication required).
 	r.GET("/health", handlers.HealthHandler)

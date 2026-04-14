@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -88,17 +89,22 @@ func ensureDirectoriesExist() error {
 	requiredDirs := []string{"/data", "/data/objects"}
 	for _, dir := range requiredDirs {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			log.Printf("Directory %s not found, creating...", dir)
+			slog.Info("Creating missing directory", "dir", dir)
 			if err := os.MkdirAll(dir, 0755); err != nil {
 				return err
 			}
 		}
 	}
-	log.Println("Required directories are present.")
+	slog.Info("Required directories are present")
 	return nil
 }
 
 func main() {
+	// Install the structured logger before any other startup work so every
+	// subsequent message — including directory creation and credential
+	// bootstrapping — flows through the configured handler.
+	configureLogger()
+
 	// NotifyContext gives a single cancellable context that trips on either a
 	// user-initiated Ctrl+C (SIGINT) or an orchestrator-initiated SIGTERM. The
 	// returned stop releases signal handlers so a second signal aborts.
@@ -106,8 +112,41 @@ func main() {
 	defer stop()
 
 	if err := run(ctx); err != nil {
-		log.Printf("server error: %v", err)
+		slog.Error("server error", "err", err.Error())
 		os.Exit(1)
+	}
+}
+
+// configureLogger wires slog's default handler from environment variables so
+// operators can tune verbosity (LOG_LEVEL) and format (LOG_FORMAT=json|text)
+// without a rebuild. JSON is the default because that is what every modern
+// log aggregator consumes; text exists for local dev readability.
+func configureLogger() {
+	level := parseLogLevel(os.Getenv("LOG_LEVEL"))
+	opts := &slog.HandlerOptions{Level: level}
+	var handler slog.Handler
+	switch strings.ToLower(os.Getenv("LOG_FORMAT")) {
+	case "text":
+		handler = slog.NewTextHandler(os.Stderr, opts)
+	default:
+		handler = slog.NewJSONHandler(os.Stderr, opts)
+	}
+	slog.SetDefault(slog.New(handler))
+}
+
+// parseLogLevel resolves the LOG_LEVEL env var. Unknown or empty values fall
+// back to INFO — surfacing a startup error for a malformed knob would be
+// worse than silently defaulting to the safe verbosity.
+func parseLogLevel(s string) slog.Level {
+	switch strings.ToLower(s) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
 }
 
@@ -150,14 +189,14 @@ func serve(ctx context.Context, storageSrv, adminSrv *http.Server) error {
 
 	// Emitted only after both ListenAndServe goroutines have been scheduled;
 	// the E2E testcontainer waits on this exact string.
-	log.Println("Server started successfully")
+	slog.Info("Server started successfully")
 
 	var serveErr error
 	select {
 	case <-ctx.Done():
-		log.Printf("shutdown requested, draining connections (timeout: %s)", shutdownTimeout)
+		slog.Info("shutdown requested, draining connections", "timeout", shutdownTimeout.String())
 	case serveErr = <-errs:
-		log.Printf("server error, draining connections (timeout: %s)", shutdownTimeout)
+		slog.Info("server error, draining connections", "timeout", shutdownTimeout.String())
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -169,7 +208,7 @@ func serve(ctx context.Context, storageSrv, adminSrv *http.Server) error {
 	if serveErr != nil {
 		return serveErr
 	}
-	log.Println("shutdown complete")
+	slog.Info("shutdown complete")
 	return nil
 }
 
@@ -177,7 +216,7 @@ func serve(ctx context.Context, storageSrv, adminSrv *http.Server) error {
 // errs while swallowing the expected ErrServerClosed from a clean Shutdown.
 func startListener(s *http.Server, startMsg string, errs chan<- error) {
 	go func() {
-		log.Println(startMsg)
+		slog.Info(startMsg)
 		if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errs <- err
 		}
@@ -207,7 +246,7 @@ func shutdownAll(ctx context.Context, servers ...*http.Server) error {
 			first = err
 			continue
 		}
-		log.Printf("additional shutdown error: %v", err)
+		slog.Error("additional shutdown error", "err", err.Error())
 	}
 	return first
 }
@@ -242,7 +281,7 @@ func bootstrapSuperUser() error {
 		return err
 	}
 	if exist {
-		log.Println("User database already initialized; environment credentials discarded")
+		slog.Info("User database already initialized; environment credentials discarded")
 		return nil
 	}
 	accessKey := os.Getenv("ACCESS_KEY_ID")
@@ -253,6 +292,6 @@ func bootstrapSuperUser() error {
 	if err := storage.CreateSuperUser(accessKey, secret); err != nil {
 		return err
 	}
-	log.Println("Super user created from environment variables")
+	slog.Info("Super user created from environment variables")
 	return nil
 }

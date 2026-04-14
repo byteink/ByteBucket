@@ -18,12 +18,17 @@ import (
 // bound to localhost or a private network — see SECURITY.md.
 func NewAdminRouter() *gin.Engine {
 	r := gin.New()
-	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 
 	// Per-request ID runs before auth so 401/403 responses from the admin
 	// middleware carry a correlatable identifier, matching the SigV4 surface.
 	r.Use(middleware.RequestIDMiddleware())
+
+	// Structured request log runs after RequestID (so the ID is in every
+	// line) and before auth (so 401/403 responses still emit a line). The
+	// handler writes at the end of the chain, so placement only affects
+	// what the logger can see in the Gin context.
+	r.Use(middleware.Log())
 
 	// Public health check.
 	r.GET("/health", handlers.HealthHandler)
