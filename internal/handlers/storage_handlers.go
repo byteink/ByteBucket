@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -288,7 +289,8 @@ func UploadObjectHandler(c *gin.Context) {
 	crcHasher := crc32.NewIEEE()
 	md5Hasher := md5.New()
 	multiWriter := io.MultiWriter(f, crcHasher, md5Hasher)
-	if _, err := io.Copy(multiWriter, c.Request.Body); err != nil {
+	written, err := io.Copy(multiWriter, c.Request.Body)
+	if err != nil {
 		_ = f.Close()
 		respondError(c, http.StatusInternalServerError, "InternalError", "Error saving file")
 		return
@@ -311,6 +313,7 @@ func UploadObjectHandler(c *gin.Context) {
 	}
 	metadata["x-amz-checksum-crc32"] = checksumBase64
 	metadata[etagMetaKey] = etag
+	metadata["Content-Length"] = strconv.FormatInt(written, 10)
 
 	metadataPath := dstPath + ".meta"
 	metadataJSON, err := json.Marshal(metadata)

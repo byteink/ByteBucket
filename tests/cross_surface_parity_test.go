@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -378,11 +379,14 @@ func TestCrossSurfaceParity(t *testing.T) {
 		if e := headResp.Header.Get("ETag"); e != want {
 			t.Fatalf("sigv4 HEAD ETag = %q; want %q", e, want)
 		}
-		// HEAD must also return the same ETag the admin surface reported on
-		// PUT, not re-derive a different value. A matching ETag alone proves
-		// content parity across surfaces.
 		if e := putResp.Header.Get("ETag"); e != want {
 			t.Fatalf("admin PUT ETag = %q; want %q", e, want)
+		}
+		// Content-Length on HEAD must match the uploaded byte count so S3
+		// clients can skip a ranged GET when they only need the size.
+		wantLen := strconv.Itoa(len(payload))
+		if got := headResp.Header.Get("Content-Length"); got != wantLen {
+			t.Fatalf("sigv4 HEAD Content-Length = %q; want %q", got, wantLen)
 		}
 	})
 
