@@ -165,7 +165,9 @@ curl http://localhost:9000/my-bucket/hello.txt \
 
 ## Admin API (port 9001)
 
-Every request carries:
+All admin API endpoints live under `/api/*` so they cannot collide with the React SPA's client-side routes (`/users`, `/buckets`, `/buckets/:name/cors`, ...) served at the root. `/health` and `/metrics` stay at the root as operational endpoints.
+
+Every authenticated request carries:
 
 ```
 X-Admin-AccessKey: <your-admin-access-key>
@@ -178,10 +180,10 @@ X-Admin-Secret:    <your-admin-secret>
 
 ### Users
 
-- `POST /users` — create a user. Server generates the access key + secret and returns them **once** in the response. Body takes an `acl` array.
-- `GET /users` — list users (secrets never returned).
-- `PUT /users/:accessKeyID` — replace ACL.
-- `DELETE /users/:accessKeyID` — remove.
+- `POST /api/users` — create a user. Server generates the access key + secret and returns them **once** in the response. Body takes an `acl` array.
+- `GET /api/users` — list users (secrets never returned).
+- `PUT /api/users/:accessKeyID` — replace ACL.
+- `DELETE /api/users/:accessKeyID` — remove.
 
 **Admin vs regular users.** "Admin" is not a flag — it's an ACL pattern. A user is considered admin (can log in to the dashboard and hit the admin API) if and only if their ACL contains `{"effect":"Allow","buckets":["*"],"actions":["*"]}`. Anything narrower is an S3-only user, scoped to whatever the ACL allows, and cannot access the admin surface. Multiple admins are fine. New users created from the admin UI start with an empty ACL — edit the ACL afterwards to grant exactly the access they need.
 
@@ -200,17 +202,17 @@ Examples:
 
 ### S3 operations via the admin surface
 
-Every S3 bucket and object operation is mounted at `/s3/*` with a JSON wire format. Same handlers, same storage, just admin auth instead of SigV4. This is what the embedded UI uses; external tooling can use it too.
+Every S3 bucket and object operation is mounted at `/api/s3/*` with a JSON wire format. Same handlers, same storage, just admin auth instead of SigV4. This is what the embedded UI uses; external tooling can use it too.
 
-- `GET /s3/` — list buckets.
-- `PUT /s3/:bucket` — create.
-- `GET /s3/:bucket` — list objects.
-- `DELETE /s3/:bucket` — delete.
-- `PUT /s3/:bucket/:key` — upload (raw body).
-- `GET /s3/:bucket/:key` — download (raw body).
-- `HEAD /s3/:bucket/:key` — metadata only.
-- `DELETE /s3/:bucket/:key` — delete.
-- `PUT|GET|DELETE /s3/:bucket?cors` — per-bucket CORS as JSON.
+- `GET /api/s3/` — list buckets.
+- `PUT /api/s3/:bucket` — create.
+- `GET /api/s3/:bucket` — list objects.
+- `DELETE /api/s3/:bucket` — delete.
+- `PUT /api/s3/:bucket/:key` — upload (raw body).
+- `GET /api/s3/:bucket/:key` — download (raw body).
+- `HEAD /api/s3/:bucket/:key` — metadata only.
+- `DELETE /api/s3/:bucket/:key` — delete.
+- `PUT|GET|DELETE /api/s3/:bucket?cors` — per-bucket CORS as JSON.
 
 ### Example
 
@@ -219,16 +221,16 @@ export ADMIN_AK=...
 export ADMIN_SK=...
 
 # Create a bucket
-curl -X PUT http://localhost:9001/s3/my-bucket \
+curl -X PUT http://localhost:9001/api/s3/my-bucket \
   -H "X-Admin-AccessKey: $ADMIN_AK" -H "X-Admin-Secret: $ADMIN_SK"
 
 # Upload an object
-curl -X PUT http://localhost:9001/s3/my-bucket/hello.txt \
+curl -X PUT http://localhost:9001/api/s3/my-bucket/hello.txt \
   -H "X-Admin-AccessKey: $ADMIN_AK" -H "X-Admin-Secret: $ADMIN_SK" \
   --data-binary 'hello'
 
 # Create a user with full access
-curl -X POST http://localhost:9001/users \
+curl -X POST http://localhost:9001/api/users \
   -H "X-Admin-AccessKey: $ADMIN_AK" -H "X-Admin-Secret: $ADMIN_SK" \
   -H "Content-Type: application/json" \
   -d '{"acl":[{"effect":"Allow","buckets":["*"],"actions":["*"]}]}'
@@ -242,9 +244,9 @@ CORS lives on the bucket, exactly like AWS S3. There is no global allowlist, no 
 
 ### Endpoints
 
-- `PUT /:bucket?cors` (port 9000, XML body) or `PUT /s3/:bucket?cors` (port 9001, JSON body)
-- `GET /:bucket?cors` / `GET /s3/:bucket?cors`
-- `DELETE /:bucket?cors` / `DELETE /s3/:bucket?cors`
+- `PUT /:bucket?cors` (port 9000, XML body) or `PUT /api/s3/:bucket?cors` (port 9001, JSON body)
+- `GET /:bucket?cors` / `GET /api/s3/:bucket?cors`
+- `DELETE /:bucket?cors` / `DELETE /api/s3/:bucket?cors`
 
 ### JSON shape (admin surface)
 
@@ -416,7 +418,7 @@ Everything lives under `/data`:
 
 - **`SignatureDoesNotMatch`** — clock skew between client and server, wrong region (ByteBucket treats all requests as `us-east-1`), or trailing slash / header canonicalisation differences. The error body's `<RequestId>` matches a server log line with the full canonical request trace at `DEBUG`.
 - **`NoSuchCORSConfiguration`** on a preflight — set one via the admin UI or the `?cors` endpoint.
-- **Admin UI says "Invalid credentials"** — you're hitting `/users` with `X-Admin-*` headers; the super-user bootstrap only runs when the user DB is empty. Check that `ENCRYPTION_KEY` matches what was used on first boot.
+- **Admin UI says "Invalid credentials"** — you're hitting `/api/users` with `X-Admin-*` headers; the super-user bootstrap only runs when the user DB is empty. Check that `ENCRYPTION_KEY` matches what was used on first boot.
 - **Lost admin credentials or `ENCRYPTION_KEY`** — delete `/data/users.db` and restart with fresh env vars. Objects survive; users and ACLs are gone.
 - **Empty `<Owner>` or `dummy-*` in responses** — you're on an older build. Upgrade to `ghcr.io/byteink/bytebucket:latest`.
 - **Connection hangs on large uploads** — use multipart. Per-connection write timeout is 5 minutes.

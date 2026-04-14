@@ -10,7 +10,7 @@ suitable for a private / localhost deployment only.
   verified on every request. There are no cookies or server-side sessions.
 - Credentials are stored in the browser's `localStorage` after login and
   sent as `X-Admin-*` headers on every admin API call. The admin UI talks
-  to storage operations via the same-origin `/s3/*` surface on port 9001;
+  to storage operations via the same-origin `/api/s3/*` surface on port 9001;
   there is no AWS SDK in the browser and no cross-origin call from the UI.
 - S3 authentication: AWS Signature V4 on port 9000.
 - CORS is configured per bucket as an S3 subresource (`PUT/GET/DELETE
