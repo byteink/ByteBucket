@@ -8,11 +8,14 @@ suitable for a private / localhost deployment only.
 
 - Admin authentication: `X-Admin-AccessKey` and `X-Admin-Secret` headers
   verified on every request. There are no cookies or server-side sessions.
-- Credentials are stored in the browser's `localStorage` after login. They
-  are sent with every admin API call and used to sign S3 requests
-  client-side via the AWS SDK.
+- Credentials are stored in the browser's `localStorage` after login and
+  sent as `X-Admin-*` headers on every admin API call. The admin UI talks
+  to storage operations via the same-origin `/s3/*` surface on port 9001;
+  there is no AWS SDK in the browser and no cross-origin call from the UI.
 - S3 authentication: AWS Signature V4 on port 9000.
-- CORS configuration is persisted on disk and managed via the admin UI.
+- CORS is configured per bucket as an S3 subresource (`PUT/GET/DELETE
+  /:bucket?cors`). There is no global, user-editable origin allowlist;
+  buckets with no configuration reject cross-origin browser requests.
 
 ## Not for public internet
 
@@ -20,6 +23,13 @@ The admin port (9001) **must not** be exposed directly to the public
 internet. Bind it to `127.0.0.1` or a private network, and front it with
 a VPN, SSH tunnel, or an authenticated reverse proxy if remote access is
 required.
+
+## Observability
+
+Every response carries an `x-amz-request-id` header (UUIDv4 per request)
+and error bodies echo the same value (`<RequestId>` in XML, `requestId`
+in JSON). Operators should ship these IDs through their log pipeline so
+a client-visible error can be correlated with server-side context.
 
 ## Deferred hardening
 
