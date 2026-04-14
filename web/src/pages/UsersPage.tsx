@@ -7,6 +7,30 @@ import { loadSession } from '../lib/session';
 // (Allow / * / *) to promote to admin.
 const defaultACL: ACLRule[] = [];
 
+// adminACL is the exact ACL shape the server's admin check matches on:
+// Effect=Allow AND Buckets contains "*" AND Actions contains "*". The UI
+// uses this preset so operators never have to hand-craft the JSON to
+// promote a user.
+const adminACL: ACLRule[] = [{ effect: 'Allow', buckets: ['*'], actions: ['*'] }];
+
+function isAdminACL(rules: ACLRule[]): boolean {
+  return rules.some(
+    (r) =>
+      r.effect?.toLowerCase() === 'allow' &&
+      (r.buckets ?? []).includes('*') &&
+      (r.actions ?? []).includes('*')
+  );
+}
+
+function isAdminText(text: string): boolean {
+  try {
+    const parsed = JSON.parse(text) as ACLRule[];
+    return Array.isArray(parsed) && isAdminACL(parsed);
+  } catch {
+    return false;
+  }
+}
+
 export default function UsersPage() {
   const session = loadSession();
   const [users, setUsers] = useState<User[] | null>(null);
@@ -92,6 +116,7 @@ export default function UsersPage() {
           <thead>
             <tr className="text-left border-b border-ink-200 text-ink-500">
               <th className="table-cell font-normal">Access Key ID</th>
+              <th className="table-cell font-normal w-20">Role</th>
               <th className="table-cell font-normal">Rules</th>
               <th className="table-cell font-normal w-40"></th>
             </tr>
@@ -100,6 +125,9 @@ export default function UsersPage() {
             {sorted.map((u) => (
               <tr key={u.accessKeyID} className="border-b border-ink-100">
                 <td className="table-cell font-mono text-xs">{u.accessKeyID}</td>
+                <td className="table-cell text-xs">
+                  {isAdminACL(u.acl ?? []) ? 'admin' : <span className="text-ink-500">user</span>}
+                </td>
                 <td className="table-cell text-ink-500 text-xs">{(u.acl ?? []).length} rule(s)</td>
                 <td className="table-cell text-right">
                   <button
@@ -126,6 +154,27 @@ export default function UsersPage() {
         <div className="fixed inset-0 bg-ink-900/40 flex items-center justify-center p-6 z-10">
           <div className="bg-ink-0 border border-ink-200 w-full max-w-xl p-6">
             <h3 className="text-sm font-mono mb-4">Edit ACL — {editing.id}</h3>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs text-ink-500">
+                {isAdminText(editing.text) ? 'Admin (full access).' : 'Not admin.'}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  className="btn h-7 px-2 text-xs"
+                  onClick={() => setEditing({ ...editing, text: JSON.stringify(adminACL, null, 2) })}
+                  disabled={isAdminText(editing.text)}
+                >
+                  Make admin
+                </button>
+                <button
+                  className="btn h-7 px-2 text-xs"
+                  onClick={() => setEditing({ ...editing, text: '[]' })}
+                  disabled={!isAdminText(editing.text)}
+                >
+                  Revoke admin
+                </button>
+              </div>
+            </div>
             <textarea
               className="w-full h-64 border border-ink-200 p-2 font-mono text-xs focus:outline-none focus:border-ink-900"
               value={editing.text}
