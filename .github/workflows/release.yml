@@ -9,17 +9,83 @@ permissions:
   contents: write
   packages: write
 
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/bytebucket
+
 jobs:
-  docker:
-    runs-on: ubuntu-latest
+  # Build each platform on its own native runner, publish by digest, then merge.
+  # Native beats QEMU emulation by ~5x on a cold cache; arm64 on QEMU was
+  # taking 20+ minutes for a single multi-arch job.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
+      - name: Compute platform pair
+        id: plat
+        run: echo "pair=${{ matrix.platform }}" | tr '/' '-' >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Metadata (labels only)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          echo "$digest" > "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ steps.plat.outputs.pair }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -35,30 +101,35 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/bytebucket
-          # Semver patterns expand vMAJOR.MINOR.PATCH into MAJOR.MINOR.PATCH,
-          # MAJOR.MINOR, MAJOR, and latest. Pre-releases (v1.2.3-rc.1) are
-          # kept out of the MAJOR / MAJOR.MINOR / latest rotation automatically.
+          images: ${{ env.IMAGE }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create manifest list
+        working-directory: /tmp/digests
+        run: |
+          set -euo pipefail
+          # Turn the tags output (newline list) into -t flags, then append the
+          # per-platform image digests so the resulting manifest list resolves
+          # the right platform at pull time.
+          tag_args=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          digests=""
+          for f in *; do
+            digests+=" ${IMAGE}@sha256:${f}"
+          done
+          eval docker buildx imagetools create ${tag_args} ${digests}
+
+      - name: Inspect manifest
+        run: |
+          set -euo pipefail
+          first_tag=$(jq -cr '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools inspect "$first_tag"
 
   release:
-    needs: docker
+    needs: manifest
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -72,9 +143,6 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          # --generate-notes produces auto-grouped notes for PRs; for
-          # direct-to-main commits it falls back to a flat list that still
-          # includes every commit since the prior tag.
           if [[ "$tag" == *-* ]]; then
             gh release create "$tag" --generate-notes --prerelease
           else
