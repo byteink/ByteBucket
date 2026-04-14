@@ -23,6 +23,41 @@ import (
 // visible as a shutdown error rather than a silent kill.
 const shutdownTimeout = 30 * time.Second
 
+// Per-server I/O bounds. These are deliberately conservative for a first pass:
+//
+//   - readHeaderTimeout: 10s is well above any well-behaved client and caps
+//     slowloris header drips that would otherwise hold a goroutine open.
+//   - readTimeout / writeTimeout: 5m is a naive per-connection bound that
+//     covers S3 ops on small/medium objects over slow networks but will be
+//     tight for very large single-object PUT/GET. Multipart upload (planned)
+//     keeps each part well under this. Streaming per-operation deadlines are
+//     the proper long-term fix and are flagged for a later refactor.
+//   - idleTimeout: 120s caps keepalive churn without closing hot connections.
+//   - maxHeaderBytes: 1 MiB matches Go's default but is set explicitly so a
+//     drive-by change to net/http defaults cannot silently relax it.
+const (
+	readHeaderTimeout = 10 * time.Second
+	readTimeout       = 5 * time.Minute
+	writeTimeout      = 5 * time.Minute
+	idleTimeout       = 120 * time.Second
+	maxHeaderBytes    = 1 << 20
+)
+
+// newServer applies the standard per-server bounds. Centralised so the two
+// servers stay in lockstep and a future reviewer sees every timeout in one
+// place rather than hunting for stray http.Server{} literals.
+func newServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
+	}
+}
+
 // ensureDirectoriesExist checks and creates required directories at startup.
 func ensureDirectoriesExist() error {
 	requiredDirs := []string{"/data", "/data/objects"}
@@ -73,8 +108,8 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	storageSrv := &http.Server{Addr: ":9000", Handler: router.NewStorageRouter()}
-	adminSrv := &http.Server{Addr: ":9001", Handler: router.NewAdminRouter()}
+	storageSrv := newServer(":9000", router.NewStorageRouter())
+	adminSrv := newServer(":9001", router.NewAdminRouter())
 	return serve(ctx, storageSrv, adminSrv)
 }
 
