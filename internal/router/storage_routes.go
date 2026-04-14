@@ -10,8 +10,8 @@ import (
 
 // RegisterStorageRoutes binds the full S3-compatible storage surface onto the
 // given router group. It is mounted twice by the process:
-//   - at "/"   under the SigV4 middleware on port 9000 (S3 clients)
-//   - at "/s3" under the admin middleware on port 9001 (admin UI)
+//   - at "/"       under the SigV4 middleware on port 9000 (S3 clients)
+//   - at "/api/s3" under the admin middleware on port 9001 (admin UI)
 //
 // Both mounts share the same handler code; auth middleware publishes the
 // user on the Gin context so handlers stay surface-agnostic.

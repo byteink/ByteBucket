@@ -15,7 +15,7 @@ import (
 
 const (
 	s3Path      = "/bucket/key"
-	adminPath   = "/s3/bucket/key"
+	adminPath   = "/api/s3/bucket/key"
 	wantCodeFmt = "code = %q, want EntityTooLarge"
 )
 
@@ -84,9 +84,9 @@ func TestBodyLimitOverLimitXML(t *testing.T) {
 	}
 }
 
-// TestBodyLimitOverLimitJSON verifies the admin surface: paths that the
-// respond helpers treat as JSON (/s3, /users, /cors) must get JSON-shaped
-// errors so the SPA can render them without an XML parser.
+// TestBodyLimitOverLimitJSON verifies the admin surface: paths under /api
+// that the respond helpers treat as JSON must get JSON-shaped errors so the
+// SPA can render them without an XML parser.
 func TestBodyLimitOverLimitJSON(t *testing.T) {
 	h := buildHandler(50)
 	body := bytes.Repeat([]byte("a"), 200)

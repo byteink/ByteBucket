@@ -12,10 +12,11 @@ import (
 // NewAdminRouter initializes the routes for admin operations.
 //
 // The embedded admin SPA is served at / (and any unknown path) without auth;
-// admin API endpoints live under an authenticated group. The UI is public by
-// design: credentials are collected client-side at login and sent on every
-// API call as X-Admin-* headers. The entire admin port is expected to be
-// bound to localhost or a private network — see SECURITY.md.
+// every authenticated admin API endpoint lives under /api/* so SPA routes
+// like /users or /buckets cannot collide with server-side handlers. The UI is
+// public by design: credentials are collected client-side at login and sent
+// on every API call as X-Admin-* headers. The entire admin port is expected
+// to be bound to localhost or a private network — see SECURITY.md.
 func NewAdminRouter() *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -31,7 +32,8 @@ func NewAdminRouter() *gin.Engine {
 	r.Use(middleware.Log())
 	r.Use(middleware.Metrics())
 
-	// Public health check.
+	// Public, unauthenticated operational endpoints. They stay at the root
+	// level so existing probes, dashboards and scrapers keep working.
 	r.GET("/health", handlers.HealthHandler)
 
 	// Prometheus scrape endpoint. Deliberately unauthenticated: standard
@@ -42,22 +44,23 @@ func NewAdminRouter() *gin.Engine {
 	// internet.
 	r.GET("/metrics", gin.WrapH(middleware.PrometheusHandler()))
 
-	// Authenticated admin API.
-	protected := r.Group("/")
-	protected.Use(auth.AdminAuthMiddleware)
+	// Authenticated admin API. Namespaced under /api so the React SPA's
+	// client-side routes (/login, /users, /buckets, ...) cannot shadow a
+	// server route on a browser refresh.
+	api := r.Group("/api")
+	api.Use(auth.AdminAuthMiddleware)
 	{
-		protected.POST("/users", handlers.CreateUserHandler)
-		protected.GET("/users", handlers.ListUsersHandler)
-		protected.PUT("/users/:accessKeyID", handlers.UpdateUserHandler)
-		protected.DELETE("/users/:accessKeyID", handlers.DeleteUserHandler)
+		api.POST("/users", handlers.CreateUserHandler)
+		api.GET("/users", handlers.ListUsersHandler)
+		api.PUT("/users/:accessKeyID", handlers.UpdateUserHandler)
+		api.DELETE("/users/:accessKeyID", handlers.DeleteUserHandler)
 
-		// Storage operations mounted under /s3 using the same handler code
-		// as the SigV4 surface on port 9000. This eliminates a parallel
+		// Storage operations mounted under /api/s3 using the same handler
+		// code as the SigV4 surface on port 9000. This eliminates a parallel
 		// admin implementation of bucket/object CRUD; the admin middleware
 		// publishes the authenticated user on the context so the shared
 		// handlers need no knowledge of which surface they are serving.
-		s3 := protected.Group("/s3")
-		RegisterStorageRoutes(s3)
+		RegisterStorageRoutes(api.Group("/s3"))
 	}
 
 	// Embedded admin SPA. Any path not matched above falls through to the

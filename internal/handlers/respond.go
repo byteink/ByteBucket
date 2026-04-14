@@ -20,12 +20,12 @@ type S3ErrorBody struct {
 }
 
 // wantsJSON reports whether the current request prefers a JSON response over
-// S3-style XML. Any request on an admin-only path (/s3, /users, /cors) speaks
-// the admin protocol; otherwise we honour an explicit Accept: application/json
-// from browser callers. Default is XML to preserve exact SigV4 wire format.
+// S3-style XML. Every admin-surface route lives under /api (see admin_router)
+// so a single prefix check captures the admin protocol; otherwise we honour
+// an explicit Accept: application/json from browser callers. Default is XML
+// to preserve exact SigV4 wire format.
 func wantsJSON(c *gin.Context) bool {
-	p := c.Request.URL.Path
-	if strings.HasPrefix(p, "/s3") || strings.HasPrefix(p, "/users") || strings.HasPrefix(p, "/cors") {
+	if strings.HasPrefix(c.Request.URL.Path, "/api") {
 		return true
 	}
 	return strings.Contains(c.GetHeader("Accept"), "application/json")

@@ -43,22 +43,23 @@ func TestStorageRouterRegistersS3Surface(t *testing.T) {
 	}
 }
 
-// The admin router must mount the entire storage surface under /s3 so the
-// admin UI can manage buckets and objects without re-implementing them.
-func TestAdminRouterMountsStorageUnderS3(t *testing.T) {
+// The admin router must mount the entire storage surface under /api/s3 so
+// the admin UI can manage buckets and objects without re-implementing them,
+// and without colliding with the SPA's client-side routes.
+func TestAdminRouterMountsStorageUnderAPIS3(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := NewAdminRouter()
 
 	cases := []struct{ method, path string }{
-		{"GET", "/s3/"},
-		{"PUT", "/s3/:bucket"},
-		{"GET", "/s3/:bucket"},
-		{"DELETE", "/s3/:bucket"},
-		{"HEAD", "/s3/:bucket"},
-		{"PUT", "/s3/:bucket/*objectKey"},
-		{"GET", "/s3/:bucket/*objectKey"},
-		{"DELETE", "/s3/:bucket/*objectKey"},
-		{"HEAD", "/s3/:bucket/*objectKey"},
+		{"GET", "/api/s3/"},
+		{"PUT", "/api/s3/:bucket"},
+		{"GET", "/api/s3/:bucket"},
+		{"DELETE", "/api/s3/:bucket"},
+		{"HEAD", "/api/s3/:bucket"},
+		{"PUT", "/api/s3/:bucket/*objectKey"},
+		{"GET", "/api/s3/:bucket/*objectKey"},
+		{"DELETE", "/api/s3/:bucket/*objectKey"},
+		{"HEAD", "/api/s3/:bucket/*objectKey"},
 	}
 	for _, tc := range cases {
 		if !routeExists(r, tc.method, tc.path) {

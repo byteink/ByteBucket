@@ -138,8 +138,7 @@ func writeEntityTooLarge(sw *silencableWriter, r *http.Request) {
 // prefersJSON mirrors handlers.wantsJSON. Kept local to avoid the import
 // cycle; the rules are small and stable.
 func prefersJSON(r *http.Request) bool {
-	p := r.URL.Path
-	if strings.HasPrefix(p, "/s3") || strings.HasPrefix(p, "/users") || strings.HasPrefix(p, "/cors") {
+	if strings.HasPrefix(r.URL.Path, "/api") {
 		return true
 	}
 	return strings.Contains(r.Header.Get("Accept"), "application/json")

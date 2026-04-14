@@ -82,7 +82,7 @@ func TestPutGetCORS_XMLRoundTrip(t *testing.T) {
 		t.Fatalf("put: expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
 
-	// GET on the SigV4 surface returns XML; path does not start with /s3,
+	// GET on the SigV4 surface returns XML; path does not start with /api,
 	// so wantsJSON is false unless the Accept header opts in.
 	req = httptest.NewRequest(http.MethodGet, "/b1?cors", nil)
 	w = httptest.NewRecorder()
@@ -119,10 +119,10 @@ func TestPutGetCORS_JSONRoundTripOnAdminPath(t *testing.T) {
 	}}}
 	jsonBody, _ := json.Marshal(payload)
 
-	// Build a router rooted at /s3 so wantsJSON activates on the path prefix.
+	// Build a router rooted at /api/s3 so wantsJSON activates on the path prefix.
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	s3 := r.Group("/s3")
+	s3 := r.Group("/api/s3")
 	s3.PUT("/:bucket", func(c *gin.Context) {
 		if _, ok := c.Request.URL.Query()["cors"]; ok {
 			PutBucketCORSHandler(c)
@@ -138,7 +138,7 @@ func TestPutGetCORS_JSONRoundTripOnAdminPath(t *testing.T) {
 		c.Status(http.StatusOK)
 	})
 
-	req := httptest.NewRequest(http.MethodPut, "/s3/b1?cors", bytes.NewReader(jsonBody))
+	req := httptest.NewRequest(http.MethodPut, "/api/s3/b1?cors", bytes.NewReader(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -146,7 +146,7 @@ func TestPutGetCORS_JSONRoundTripOnAdminPath(t *testing.T) {
 		t.Fatalf("put: expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/s3/b1?cors", nil)
+	req = httptest.NewRequest(http.MethodGet, "/api/s3/b1?cors", nil)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
