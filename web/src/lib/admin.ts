@@ -42,14 +42,14 @@ async function parseError(res: Response): Promise<string> {
 }
 
 export async function listUsers(s: Session): Promise<User[]> {
-  const res = await fetch('/users', { headers: authHeaders(s) });
+  const res = await fetch('/api/users', { headers: authHeaders(s) });
   if (!res.ok) throw new Error(await parseError(res));
   const data = (await res.json()) as User[] | null;
   return data ?? [];
 }
 
 export async function createUser(s: Session, acl: ACLRule[]): Promise<CreatedUser> {
-  const res = await fetch('/users', {
+  const res = await fetch('/api/users', {
     method: 'POST',
     headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
     body: JSON.stringify({ acl }),
@@ -59,7 +59,7 @@ export async function createUser(s: Session, acl: ACLRule[]): Promise<CreatedUse
 }
 
 export async function updateUserACL(s: Session, accessKeyID: string, acl: ACLRule[]): Promise<void> {
-  const res = await fetch(`/users/${encodeURIComponent(accessKeyID)}`, {
+  const res = await fetch(`/api/users/${encodeURIComponent(accessKeyID)}`, {
     method: 'PUT',
     headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
     body: JSON.stringify({ acl }),
@@ -68,7 +68,7 @@ export async function updateUserACL(s: Session, accessKeyID: string, acl: ACLRul
 }
 
 export async function deleteUser(s: Session, accessKeyID: string): Promise<void> {
-  const res = await fetch(`/users/${encodeURIComponent(accessKeyID)}`, {
+  const res = await fetch(`/api/users/${encodeURIComponent(accessKeyID)}`, {
     method: 'DELETE',
     headers: authHeaders(s),
   });
@@ -79,7 +79,7 @@ export async function deleteUser(s: Session, accessKeyID: string): Promise<void>
 // API, or a string describing the rejection.
 export async function checkAdminAuth(s: Session): Promise<string | null> {
   try {
-    const res = await fetch('/users', { headers: authHeaders(s) });
+    const res = await fetch('/api/users', { headers: authHeaders(s) });
     if (res.status === 401 || res.status === 403) {
       return 'Invalid admin credentials';
     }

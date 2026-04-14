@@ -1,6 +1,6 @@
-// Thin same-origin client for the /s3 admin surface.
+// Thin same-origin client for the /api/s3 admin surface.
 //
-// All requests go to the admin port under /s3/*, authenticated with the
+// All requests go to the admin port under /api/s3/*, authenticated with the
 // X-Admin-* header pair. The server negotiates JSON via the Accept header,
 // so handlers return the browser-friendly shape rather than S3 XML. Errors
 // carry either {code,message} (admin JSON) or {error} (user handlers); we
@@ -67,21 +67,21 @@ async function throwHTTP(res: Response): Promise<never> {
 }
 
 // encPath encodes every path segment separately so slashes inside object keys
-// are preserved as literal path separators in /s3/:bucket/*key. encodeURIComponent
+// are preserved as literal path separators in /api/s3/:bucket/*key. encodeURIComponent
 // would escape them, which the router would then refuse.
 function encPath(parts: string[]): string {
   return parts.map((p) => encodeURIComponent(p)).join('/');
 }
 
 export async function listBuckets(s: Session): Promise<Bucket[]> {
-  const res = await fetch('/s3/', { headers: authHeaders(s) });
+  const res = await fetch('/api/s3/', { headers: authHeaders(s) });
   if (!res.ok) await throwHTTP(res);
   const body = (await res.json()) as { buckets?: Bucket[] | null };
   return body.buckets ?? [];
 }
 
 export async function createBucket(s: Session, name: string): Promise<void> {
-  const res = await fetch(`/s3/${encodeURIComponent(name)}`, {
+  const res = await fetch(`/api/s3/${encodeURIComponent(name)}`, {
     method: 'PUT',
     headers: authHeaders(s),
   });
@@ -89,7 +89,7 @@ export async function createBucket(s: Session, name: string): Promise<void> {
 }
 
 export async function deleteBucket(s: Session, name: string): Promise<void> {
-  const res = await fetch(`/s3/${encodeURIComponent(name)}`, {
+  const res = await fetch(`/api/s3/${encodeURIComponent(name)}`, {
     method: 'DELETE',
     headers: authHeaders(s),
   });
@@ -97,7 +97,7 @@ export async function deleteBucket(s: Session, name: string): Promise<void> {
 }
 
 export async function listObjects(s: Session, bucket: string): Promise<S3Object[]> {
-  const res = await fetch(`/s3/${encodeURIComponent(bucket)}`, {
+  const res = await fetch(`/api/s3/${encodeURIComponent(bucket)}`, {
     headers: authHeaders(s),
   });
   if (!res.ok) await throwHTTP(res);
@@ -114,7 +114,7 @@ export async function putObject(
   // Upload the raw bytes; server persists them verbatim and records only the
   // CRC32 checksum plus Content-Type. Intentionally not streaming via
   // ReadableStream — Safari still lacks half-duplex fetch upload support.
-  const res = await fetch(`/s3/${encodeURIComponent(bucket)}/${encPath(key.split('/'))}`, {
+  const res = await fetch(`/api/s3/${encodeURIComponent(bucket)}/${encPath(key.split('/'))}`, {
     method: 'PUT',
     headers: {
       ...authHeaders(s),
@@ -126,7 +126,7 @@ export async function putObject(
 }
 
 export async function getObject(s: Session, bucket: string, key: string): Promise<Blob> {
-  const res = await fetch(`/s3/${encodeURIComponent(bucket)}/${encPath(key.split('/'))}`, {
+  const res = await fetch(`/api/s3/${encodeURIComponent(bucket)}/${encPath(key.split('/'))}`, {
     headers: {
       'X-Admin-AccessKey': s.accessKey,
       'X-Admin-Secret': s.secret,
@@ -137,7 +137,7 @@ export async function getObject(s: Session, bucket: string, key: string): Promis
 }
 
 export async function deleteObject(s: Session, bucket: string, key: string): Promise<void> {
-  const res = await fetch(`/s3/${encodeURIComponent(bucket)}/${encPath(key.split('/'))}`, {
+  const res = await fetch(`/api/s3/${encodeURIComponent(bucket)}/${encPath(key.split('/'))}`, {
     method: 'DELETE',
     headers: authHeaders(s),
   });
@@ -145,7 +145,7 @@ export async function deleteObject(s: Session, bucket: string, key: string): Pro
 }
 
 export async function headObject(s: Session, bucket: string, key: string): Promise<boolean> {
-  const res = await fetch(`/s3/${encodeURIComponent(bucket)}/${encPath(key.split('/'))}`, {
+  const res = await fetch(`/api/s3/${encodeURIComponent(bucket)}/${encPath(key.split('/'))}`, {
     method: 'HEAD',
     headers: {
       'X-Admin-AccessKey': s.accessKey,
@@ -158,7 +158,7 @@ export async function headObject(s: Session, bucket: string, key: string): Promi
 }
 
 export async function getBucketCORS(s: Session, bucket: string): Promise<BucketCORSConfig> {
-  const res = await fetch(`/s3/${encodeURIComponent(bucket)}?cors`, {
+  const res = await fetch(`/api/s3/${encodeURIComponent(bucket)}?cors`, {
     headers: authHeaders(s),
   });
   if (res.status === 404) throw new NoSuchCORSConfiguration();
@@ -171,7 +171,7 @@ export async function putBucketCORS(
   bucket: string,
   cfg: BucketCORSConfig,
 ): Promise<void> {
-  const res = await fetch(`/s3/${encodeURIComponent(bucket)}?cors`, {
+  const res = await fetch(`/api/s3/${encodeURIComponent(bucket)}?cors`, {
     method: 'PUT',
     headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
     body: JSON.stringify(cfg),
@@ -180,7 +180,7 @@ export async function putBucketCORS(
 }
 
 export async function deleteBucketCORS(s: Session, bucket: string): Promise<void> {
-  const res = await fetch(`/s3/${encodeURIComponent(bucket)}?cors`, {
+  const res = await fetch(`/api/s3/${encodeURIComponent(bucket)}?cors`, {
     method: 'DELETE',
     headers: authHeaders(s),
   });
