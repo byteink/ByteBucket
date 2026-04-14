@@ -178,10 +178,25 @@ X-Admin-Secret:    <your-admin-secret>
 
 ### Users
 
-- `POST /users` — create a user. Server generates the access key + secret and returns them **once** in the response. Body: `{"acl":[{"effect":"Allow","buckets":["*"],"actions":["*"]}]}`.
+- `POST /users` — create a user. Server generates the access key + secret and returns them **once** in the response. Body takes an `acl` array.
 - `GET /users` — list users (secrets never returned).
 - `PUT /users/:accessKeyID` — replace ACL.
 - `DELETE /users/:accessKeyID` — remove.
+
+**Admin vs regular users.** "Admin" is not a flag — it's an ACL pattern. A user is considered admin (can log in to the dashboard and hit the admin API) if and only if their ACL contains `{"effect":"Allow","buckets":["*"],"actions":["*"]}`. Anything narrower is an S3-only user, scoped to whatever the ACL allows, and cannot access the admin surface. Multiple admins are fine. New users created from the admin UI start with an empty ACL — edit the ACL afterwards to grant exactly the access they need.
+
+Examples:
+
+```json
+// Admin — full access, can use the dashboard
+{ "acl": [{ "effect": "Allow", "buckets": ["*"], "actions": ["*"] }] }
+
+// Read-only user on one bucket — no dashboard access
+{ "acl": [{ "effect": "Allow", "buckets": ["reports"], "actions": ["s3:GetObject", "s3:ListBucket"] }] }
+
+// Write-only uploader — no dashboard, no reads
+{ "acl": [{ "effect": "Allow", "buckets": ["uploads"], "actions": ["s3:PutObject"] }] }
+```
 
 ### S3 operations via the admin surface
 
@@ -402,6 +417,7 @@ Everything lives under `/data`:
 - **`SignatureDoesNotMatch`** — clock skew between client and server, wrong region (ByteBucket treats all requests as `us-east-1`), or trailing slash / header canonicalisation differences. The error body's `<RequestId>` matches a server log line with the full canonical request trace at `DEBUG`.
 - **`NoSuchCORSConfiguration`** on a preflight — set one via the admin UI or the `?cors` endpoint.
 - **Admin UI says "Invalid credentials"** — you're hitting `/users` with `X-Admin-*` headers; the super-user bootstrap only runs when the user DB is empty. Check that `ENCRYPTION_KEY` matches what was used on first boot.
+- **Lost admin credentials or `ENCRYPTION_KEY`** — delete `/data/users.db` and restart with fresh env vars. Objects survive; users and ACLs are gone.
 - **Empty `<Owner>` or `dummy-*` in responses** — you're on an older build. Upgrade to `ghcr.io/byteink/bytebucket:latest`.
 - **Connection hangs on large uploads** — use multipart. Per-connection write timeout is 5 minutes.
 - **Metrics endpoint returns 404** — you hit port 9000. `/metrics` is on 9001.

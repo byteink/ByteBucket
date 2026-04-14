@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { ACLRule, createUser, CreatedUser, deleteUser, listUsers, updateUserACL, User } from '../lib/admin';
 import { loadSession } from '../lib/session';
 
-const defaultACL: ACLRule[] = [{ effect: 'Allow', buckets: ['*'], actions: ['*'] }];
+// Least-privilege default: no rules. The operator explicitly edits the ACL
+// after creation to grant bucket / action access, or the admin wildcard
+// (Allow / * / *) to promote to admin.
+const defaultACL: ACLRule[] = [];
 
 export default function UsersPage() {
   const session = loadSession();
