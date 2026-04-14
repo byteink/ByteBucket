@@ -7,8 +7,8 @@ DIST_DST := internal/webui/dist
 ui:
 	cd $(WEB_DIR) && npm ci --no-audit --no-fund
 	cd $(WEB_DIR) && npm run build
-	rm -rf $(DIST_DST)
-	cp -R $(DIST_SRC) $(DIST_DST)
+	find $(DIST_DST) -mindepth 1 ! -name .keep -delete
+	cp -R $(DIST_SRC)/. $(DIST_DST)/
 
 dev: ui
 	go run ./cmd/ByteBucket

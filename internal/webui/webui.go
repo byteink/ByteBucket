@@ -1,9 +1,10 @@
 // Package webui serves the embedded admin SPA.
 //
 // The SPA is produced by `web/` (Vite) and copied into ./dist/ as part of
-// the build (Makefile / Dockerfile). A placeholder dist/ is committed so
-// that go build / go test never fail in environments that have not run
-// the UI build yet.
+// the build (Makefile / Dockerfile). dist/ is git-ignored; a .keep file
+// anchors the directory so //go:embed compiles from a fresh clone. When
+// dist/ is empty (no `make ui` run yet) the handler serves an inline
+// fallback page so the binary is never broken.
 package webui
 
 import (
@@ -94,11 +95,17 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, info.Name(), info.ModTime(), bytes.NewReader(data))
 }
 
+const fallbackIndex = `<!doctype html>
+<html><head><meta charset="utf-8"><title>ByteBucket</title></head>
+<body><p>Admin UI not built. Run <code>make ui</code> (local) or rebuild the Docker image (production).</p></body></html>
+`
+
 func (h *spaHandler) serveIndex(w http.ResponseWriter, r *http.Request) {
 	data, err := distFS.ReadFile(indexPath)
 	if err != nil {
-		http.Error(w, "index not available", http.StatusInternalServerError)
-		return
+		// dist/ is empty (no make ui yet). Serve an inline hint instead of
+		// 500ing — the admin API on this port is still usable via curl.
+		data = []byte(fallbackIndex)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")

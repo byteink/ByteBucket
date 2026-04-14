@@ -55,6 +55,8 @@ tmp
 web/node_modules/
 web/dist/
 web/tsconfig.tsbuildinfo
-# Embed target: we intentionally check the built SPA into the repo so that
-# `go build` / `go test` work without a Node toolchain. Regenerate with
-# `make ui` after web/ changes.
+# Embed target: rebuilt from web/ by `make ui` and by the Dockerfile's
+# node stage. Never committed. Go falls back to an inline page when the
+# directory is empty.
+internal/webui/dist/*
+!internal/webui/dist/.keep
