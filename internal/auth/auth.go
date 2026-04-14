@@ -313,6 +313,13 @@ func getActionFromMethod(method, bucket string) string {
 			return "s3:DeleteBucket"
 		}
 		return "s3:DeleteObject"
+	case http.MethodPost:
+		// POST on an S3 object path is reserved for multipart initiate
+		// (?uploads) and complete (?uploadId). Both are writes, so reuse the
+		// same permission as a single-PUT upload; this keeps ACLs that grant
+		// s3:PutObject automatically covering multipart without needing a
+		// separate action string.
+		return "s3:PutObject"
 	default:
 		return ""
 	}
