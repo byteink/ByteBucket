@@ -1,50 +1,69 @@
-### Go template
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
+# Anything not needed to produce the production image.
+# Dockerfile's node stage copies web/ for npm install + build; the go stage
+# copies the rest of the source tree. Tests, dev tooling, docs, CI, and the
+# local data directory never belong in the build context.
+
+# Version control and IDE
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+
+# Claude + agent tooling
+.claude
+CLAUDE.md
+
+# Developer docs — image page on GHCR uses README.md only
+DEVELOPMENT.md
+SECURITY.md
+
+# Tests (E2E tests build their own image via testcontainers, not used in prod)
+tests
+**/*_test.go
+
+# Build artefacts that would otherwise shadow the real build output
+build
+bin
+tmp
+data
+*.out
+*.test
+
+# JS build/test junk that must not cross into the node stage
+web/node_modules
+web/dist
+web/tsconfig.tsbuildinfo
+web/coverage
+web/.vite
+web/.turbo
+web/npm-debug.log*
+web/yarn-debug.log*
+web/yarn-error.log*
+web/pnpm-debug.log*
+
+# Go workspace files and tool caches
+go.work
+go.work.sum
+vendor
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
 
-# Test binary, built with `go test -c`
-*.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
-*.out
-
-# build folder
-build/
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
-go.work
-go.work.sum
-
-# env file
+# Env files — never bake secrets into an image
 .env
+.env.*
+!.env.example
 
-# IDEs and editors
-/.idea
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
-
-# IDE - VSCode
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-
-# data directory
-data/
-tmp
-
+# Misc
+*.log
+Makefile
+docker/compose.yml
+docker/compose.dev.yml
+docker/Dockerfile.dev
