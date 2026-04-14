@@ -291,6 +291,51 @@ async function putBucketCORS(bucket: string) {
 - `<Owner>` in `ListAllMyBuckets` is the authenticated access key (no placeholder).
 - `ETag` is the hex MD5 of object bytes, wrapped in double quotes, matching S3's wire format on PUT, GET, HEAD and LIST.
 
+### Structured logs
+
+Every request emits one JSON log line at the end of handling with stable fields: `method`, `path` (the route template, e.g. `/s3/:bucket/*objectKey`, so label cardinality stays bounded), `status`, `duration_ms`, `remote_ip`, `request_id`, `bytes_in`, `bytes_out`, and when auth has run `auth_method` and `user_access_key`. Query strings are stripped from `path` so SigV4 presign signatures never leak into an aggregator.
+
+Configure via environment:
+
+- `LOG_LEVEL` — `debug`, `info` (default), `warn`, `error`.
+- `LOG_FORMAT` — `json` (default) or `text` for local development readability.
+
+Status drives level: 5xx → `ERROR`, 4xx → `WARN`, otherwise `INFO`.
+
+### Prometheus metrics
+
+`GET /metrics` on port 9001 returns Prometheus text-format metrics. The endpoint is unauthenticated; it relies on the same network boundary that protects the admin port (see [SECURITY.md](SECURITY.md)). ByteBucket speaks the Prometheus wire format only — it does not bundle a scraper. Point your existing Prometheus / Grafana Agent / VictoriaMetrics at port 9001.
+
+Exposed metrics:
+
+- `http_requests_total{method,path,status}` — request counter (path is the route template).
+- `http_request_duration_seconds{method,path}` — latency histogram.
+- `http_request_size_bytes{method,path}`, `http_response_size_bytes{method,path}` — payload histograms.
+- `bytebucket_multipart_uploads_in_progress` — gauge of live multipart sessions.
+- `bytebucket_objects_bytes_total{bucket}` — per-bucket byte total (best-effort delta; not recomputed on restart).
+- Standard `go_*` and `process_*` collectors.
+
+Example:
+
+```bash
+$ curl -s http://localhost:9001/metrics | head -15
+# HELP bytebucket_multipart_uploads_in_progress Number of multipart uploads currently open (incremented on Create, decremented on Complete/Abort).
+# TYPE bytebucket_multipart_uploads_in_progress gauge
+bytebucket_multipart_uploads_in_progress 0
+# HELP go_gc_duration_seconds A summary of the wall-time pause (stop-the-world) duration in garbage collection cycles.
+# TYPE go_gc_duration_seconds summary
+go_gc_duration_seconds{quantile="0"} 0
+go_gc_duration_seconds{quantile="0.25"} 0
+go_gc_duration_seconds{quantile="0.5"} 0
+go_gc_duration_seconds{quantile="0.75"} 0
+go_gc_duration_seconds{quantile="1"} 0
+go_gc_duration_seconds_sum 0
+go_gc_duration_seconds_count 0
+# HELP go_gc_gogc_percent Heap size target percentage configured by the user, otherwise 100.
+# TYPE go_gc_gogc_percent gauge
+go_gc_gogc_percent 100
+```
+
 ---
 
 ## Troubleshooting

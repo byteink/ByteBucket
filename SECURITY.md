@@ -31,6 +31,13 @@ and error bodies echo the same value (`<RequestId>` in XML, `requestId`
 in JSON). Operators should ship these IDs through their log pipeline so
 a client-visible error can be correlated with server-side context.
 
+The admin port also exposes `GET /metrics` in Prometheus text format.
+This endpoint is **unauthenticated** on purpose: standard Prometheus
+practice is to scrape over a private network and rely on network
+boundaries for access control. The existing "do not expose port 9001 to
+the public internet" rule already covers this — no separate guidance is
+required beyond keeping 9001 bound to localhost or a private subnet.
+
 ## Deferred hardening
 
 The following items are known gaps and are tracked for future work:
