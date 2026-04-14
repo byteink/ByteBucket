@@ -12,6 +12,8 @@ docker pull ghcr.io/byteink/bytebucket:latest
 
 > **Heads up — security.** The admin port (`9001`) must not be exposed to the public internet. Put it behind a private network, VPN, SSH tunnel, or reverse proxy with access control. Details and the deferred-hardening list are in [SECURITY.md](SECURITY.md).
 
+Working on the code? See [DEVELOPMENT.md](DEVELOPMENT.md) for the contributor guide (repo layout, local setup, Vite dev loop, testing, release flow, conventions).
+
 ---
 
 ## Contents
