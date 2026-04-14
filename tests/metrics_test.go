@@ -39,7 +39,7 @@ func scrapeMetrics(t *testing.T) string {
 // returns its numeric value. Returns -1 if the line is missing so callers
 // can distinguish "not yet observed" from "observed as zero".
 func extractCounter(body, metric, labels string) float64 {
-	// Matches e.g. `http_requests_total{method="GET",path="/s3/",status="200"} 7`
+	// Matches e.g. `http_requests_total{method="GET",path="/api/s3/",status="200"} 7`
 	re := regexp.MustCompile("(?m)^" + regexp.QuoteMeta(metric+"{"+labels+"}") + `\s+([0-9eE+\-.]+)\s*$`)
 	m := re.FindStringSubmatch(body)
 	if m == nil {
@@ -74,15 +74,15 @@ func TestMetricsEndpointExposesExpectedMetrics(t *testing.T) {
 // middleware wiring — not just registration — against the running binary.
 func TestMetricsCounterIncrementsAcrossAdminRequest(t *testing.T) {
 	before := scrapeMetrics(t)
-	labels := `method="GET",path="/s3/",status="200"`
+	labels := `method="GET",path="/api/s3/",status="200"`
 	prev := extractCounter(before, "http_requests_total", labels)
 	if prev < 0 {
 		prev = 0
 	}
 
 	// List buckets on the admin S3 surface. Any authenticated admin call
-	// will do; /s3/ is the cheapest.
-	req, err := http.NewRequest(http.MethodGet, adminURL+"/s3/", nil)
+	// will do; /api/s3/ is the cheapest.
+	req, err := http.NewRequest(http.MethodGet, adminURL+"/api/s3/", nil)
 	if err != nil {
 		t.Fatalf("request build: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestMetricsCounterIncrementsAcrossAdminRequest(t *testing.T) {
 	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 from /s3/, got %d", resp.StatusCode)
+		t.Fatalf("expected 200 from /api/s3/, got %d", resp.StatusCode)
 	}
 
 	after := scrapeMetrics(t)

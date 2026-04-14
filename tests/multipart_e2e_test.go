@@ -179,20 +179,20 @@ func TestE2E_Multipart_RoundtripViaSigV4(t *testing.T) {
 }
 
 // TestE2E_Multipart_RoundtripViaAdmin exercises the same six-endpoint flow
-// on port 9001 under /s3 with JSON bodies and admin-header auth, proving
+// on port 9001 under /api/s3 with JSON bodies and admin-header auth, proving
 // cross-surface parity of the multipart implementation.
 func TestE2E_Multipart_RoundtripViaAdmin(t *testing.T) {
 	bucket := fmt.Sprintf("mp-admin-%d", time.Now().UnixNano())
 	// Create bucket via admin surface.
 	{
-		req := adminRequest(t, http.MethodPut, "/s3/"+bucket, nil, "")
+		req := adminRequest(t, http.MethodPut, "/api/s3/"+bucket, nil, "")
 		resp := adminDo(t, req)
 		_ = resp.Body.Close()
 	}
 
 	key := "obj.bin"
 	// Create
-	createResp := adminDo(t, adminRequest(t, http.MethodPost, "/s3/"+bucket+"/"+key+"?uploads", nil, ""))
+	createResp := adminDo(t, adminRequest(t, http.MethodPost, "/api/s3/"+bucket+"/"+key+"?uploads", nil, ""))
 	if createResp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(createResp.Body)
 		_ = createResp.Body.Close()
@@ -213,7 +213,7 @@ func TestE2E_Multipart_RoundtripViaAdmin(t *testing.T) {
 	uploaded := make([]multipartPart, 0, len(parts))
 	for i, p := range parts {
 		pn := i + 1
-		path := fmt.Sprintf("/s3/%s/%s?partNumber=%d&uploadId=%s", bucket, key, pn, createBody.UploadID)
+		path := fmt.Sprintf("/api/s3/%s/%s?partNumber=%d&uploadId=%s", bucket, key, pn, createBody.UploadID)
 		req := adminRequest(t, http.MethodPut, path, p, "application/octet-stream")
 		resp := adminDo(t, req)
 		if resp.StatusCode != http.StatusOK {
@@ -234,7 +234,7 @@ func TestE2E_Multipart_RoundtripViaAdmin(t *testing.T) {
 	}
 	raw, _ := json.Marshal(bodyObj)
 	compReq := adminRequest(t, http.MethodPost,
-		"/s3/"+bucket+"/"+key+"?uploadId="+createBody.UploadID, raw, "application/json")
+		"/api/s3/"+bucket+"/"+key+"?uploadId="+createBody.UploadID, raw, "application/json")
 	compResp := adminDo(t, compReq)
 	if compResp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(compResp.Body)

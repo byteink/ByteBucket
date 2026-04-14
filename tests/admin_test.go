@@ -58,7 +58,7 @@ func createRestrictedUser(withListPermission bool) (string, string) {
 	}
 
 	body, _ := json.Marshal(userPayload)
-	req, err := http.NewRequest("POST", adminURL+"/users", bytes.NewReader(body))
+	req, err := http.NewRequest("POST", adminURL+"/api/users", bytes.NewReader(body))
 	if err != nil {
 		panic(err)
 	}
@@ -103,7 +103,7 @@ func createRestrictedUser(withListPermission bool) (string, string) {
 func deleteUser(t *testing.T, accessKeyID string) {
 	t.Log("Deleting user via Admin API...")
 
-	req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/users/%s", adminURL, accessKeyID), nil)
+	req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/api/users/%s", adminURL, accessKeyID), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -572,7 +572,7 @@ func TestHeadBucket(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(userPayload)
-	req, err := http.NewRequest("POST", adminURL+"/users", bytes.NewReader(body))
+	req, err := http.NewRequest("POST", adminURL+"/api/users", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -89,17 +89,17 @@ func TestE2E_WebUI_SPAFallback(t *testing.T) {
 
 func TestE2E_WebUI_AdminEndpointsStillProtected(t *testing.T) {
 	// Without auth: rejected.
-	unauthed, err := http.Get(adminURL + "/users")
+	unauthed, err := http.Get(adminURL + "/api/users")
 	if err != nil {
-		t.Fatalf("GET /users: %v", err)
+		t.Fatalf("GET /api/users: %v", err)
 	}
 	_ = unauthed.Body.Close()
 	if unauthed.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("unauthed /users: got %d, want 401", unauthed.StatusCode)
+		t.Fatalf("unauthed /api/users: got %d, want 401", unauthed.StatusCode)
 	}
 
 	// With auth: accepted.
-	req, err := http.NewRequest(http.MethodGet, adminURL+"/users", nil)
+	req, err := http.NewRequest(http.MethodGet, adminURL+"/api/users", nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -108,10 +108,41 @@ func TestE2E_WebUI_AdminEndpointsStillProtected(t *testing.T) {
 
 	authed, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("authed GET /users: %v", err)
+		t.Fatalf("authed GET /api/users: %v", err)
 	}
 	_ = authed.Body.Close()
 	if authed.StatusCode != http.StatusOK {
-		t.Fatalf("authed /users: got %d, want 200", authed.StatusCode)
+		t.Fatalf("authed /api/users: got %d, want 200", authed.StatusCode)
+	}
+}
+
+// TestE2E_WebUI_SPAOvershadowRegression locks in the fix that moved every
+// admin API endpoint under /api/*. Before the refactor, an unauthenticated
+// GET /users on the admin port returned raw JSON from the admin handler
+// (401 "Missing admin credentials"); that response shadowed the SPA's
+// client-side /users route on browser refresh. Now that admin routes live
+// under /api, /users must fall through to the SPA fallback and render the
+// HTML shell — otherwise the original bug has regressed.
+func TestE2E_WebUI_SPAOvershadowRegression(t *testing.T) {
+	for _, path := range []string{"/users", "/buckets", "/buckets/foo/cors"} {
+		res, err := http.Get(adminURL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		body, _ := io.ReadAll(res.Body)
+		_ = res.Body.Close()
+
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: got %d, want 200 (SPA fallback); body=%s",
+				path, res.StatusCode, body)
+		}
+		if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Fatalf("GET %s: content-type %q, want text/html; body=%s",
+				path, ct, body)
+		}
+		if strings.Contains(string(body), "Missing admin credentials") {
+			t.Fatalf("GET %s returned raw admin-JSON error, SPA is being shadowed: %s",
+				path, body)
+		}
 	}
 }

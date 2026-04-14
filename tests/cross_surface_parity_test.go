@@ -21,7 +21,7 @@ import (
 // Cross-surface parity E2E tests.
 //
 // The refactor mounts the same S3 storage handlers on two routers: SigV4
-// at "/" on port 9000 (XML wire format) and admin-header-auth at "/s3/*"
+// at "/" on port 9000 (XML wire format) and admin-header-auth at "/api/s3/*"
 // on port 9001 (JSON wire format). These tests assert that for every op,
 // what one surface writes the other can read, that content-addressable
 // properties (ETag, body bytes) are byte-for-byte identical, and that
@@ -46,7 +46,7 @@ const (
 )
 
 // --- admin-surface helpers. Thin wrappers over net/http that attach the
-// admin credentials and target /s3/* on the admin router. SigV4 helpers
+// admin credentials and target /api/s3/* on the admin router. SigV4 helpers
 // are reused from auth_security_test.go (buildHeaderSigned, sigV4Request).
 
 // adminDo sends a pre-built request with admin headers attached.
@@ -61,7 +61,7 @@ func adminDo(t *testing.T, req *http.Request) *http.Response {
 	return resp
 }
 
-// adminRequest builds an authenticated request against the admin /s3
+// adminRequest builds an authenticated request against the admin /api/s3
 // surface. Body is optional; contentType is ignored when body is nil.
 func adminRequest(t *testing.T, method, path string, body []byte, contentType string) *http.Request {
 	t.Helper()
@@ -224,7 +224,7 @@ type xmlCORSConfiguration struct {
 
 func putBucketAdmin(t *testing.T, bucket string) {
 	t.Helper()
-	resp := adminDo(t, adminRequest(t, http.MethodPut, "/s3/"+bucket, nil, ""))
+	resp := adminDo(t, adminRequest(t, http.MethodPut, "/api/s3/"+bucket, nil, ""))
 	_ = readAllClose(t, resp)
 	if resp.StatusCode/100 != 2 {
 		t.Fatalf("admin PUT bucket %s = %d", bucket, resp.StatusCode)
@@ -242,7 +242,7 @@ func putBucketSigV4(t *testing.T, bucket string) {
 
 func putObjectAdmin(t *testing.T, bucket, key string, body []byte) *http.Response {
 	t.Helper()
-	resp := adminDo(t, adminRequest(t, http.MethodPut, "/s3/"+bucket+"/"+key, body, "application/octet-stream"))
+	resp := adminDo(t, adminRequest(t, http.MethodPut, "/api/s3/"+bucket+"/"+key, body, "application/octet-stream"))
 	if resp.StatusCode/100 != 2 {
 		t.Fatalf("admin PUT obj = %d", resp.StatusCode)
 	}
@@ -293,7 +293,7 @@ func TestCrossSurfaceParity(t *testing.T) {
 		bucket := uniqueBucket("parity-b")
 		putBucketSigV4(t, bucket)
 
-		resp := adminDo(t, adminRequest(t, http.MethodGet, "/s3/", nil, ""))
+		resp := adminDo(t, adminRequest(t, http.MethodGet, "/api/s3/", nil, ""))
 		body := readAllClose(t, resp)
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("list buckets admin = %d: %s", resp.StatusCode, body)
@@ -351,7 +351,7 @@ func TestCrossSurfaceParity(t *testing.T) {
 			t.Fatalf("sigv4 PUT ETag = %q; want %q", got, want)
 		}
 
-		getResp := adminDo(t, adminRequest(t, http.MethodGet, "/s3/"+bucket+"/blob.bin", nil, ""))
+		getResp := adminDo(t, adminRequest(t, http.MethodGet, "/api/s3/"+bucket+"/blob.bin", nil, ""))
 		got := readAllClose(t, getResp)
 		if getResp.StatusCode != http.StatusOK {
 			t.Fatalf("admin GET = %d: %s", getResp.StatusCode, got)
@@ -424,7 +424,7 @@ func TestCrossSurfaceParity(t *testing.T) {
 		}
 
 		// Admin JSON listing.
-		jResp := adminDo(t, adminRequest(t, http.MethodGet, "/s3/"+bucket, nil, ""))
+		jResp := adminDo(t, adminRequest(t, http.MethodGet, "/api/s3/"+bucket, nil, ""))
 		jBody := readAllClose(t, jResp)
 		if jResp.StatusCode != http.StatusOK {
 			t.Fatalf("admin list = %d: %s", jResp.StatusCode, jBody)
@@ -462,7 +462,7 @@ func TestCrossSurfaceParity(t *testing.T) {
 		putResp := putObjectAdmin(t, bucket, "gone.txt", []byte("bye"))
 		_ = readAllClose(t, putResp)
 
-		delResp := adminDo(t, adminRequest(t, http.MethodDelete, "/s3/"+bucket+"/gone.txt", nil, ""))
+		delResp := adminDo(t, adminRequest(t, http.MethodDelete, "/api/s3/"+bucket+"/gone.txt", nil, ""))
 		_ = readAllClose(t, delResp)
 		if delResp.StatusCode != http.StatusNoContent {
 			t.Fatalf("admin DELETE = %d", delResp.StatusCode)
@@ -488,7 +488,7 @@ func TestCrossSurfaceParity(t *testing.T) {
 		}
 
 		// Admin surface.
-		aResp := adminDo(t, adminRequest(t, http.MethodGet, "/s3/", nil, ""))
+		aResp := adminDo(t, adminRequest(t, http.MethodGet, "/api/s3/", nil, ""))
 		_ = readAllClose(t, aResp)
 		aID := aResp.Header.Get("x-amz-request-id")
 		if aID == "" {
@@ -537,7 +537,7 @@ func TestCrossSurfaceParity(t *testing.T) {
 		}
 
 		// Read back via admin JSON.
-		getResp := adminDo(t, adminRequest(t, http.MethodGet, "/s3/"+bucket+"?cors", nil, ""))
+		getResp := adminDo(t, adminRequest(t, http.MethodGet, "/api/s3/"+bucket+"?cors", nil, ""))
 		body := readAllClose(t, getResp)
 		if getResp.StatusCode != http.StatusOK {
 			t.Fatalf("admin GET cors = %d: %s", getResp.StatusCode, body)
@@ -567,7 +567,7 @@ func TestCrossSurfaceParity(t *testing.T) {
 		putBucketAdmin(t, bucket)
 
 		body := `{"CORSRules":[{"AllowedMethods":["GET"],"AllowedOrigins":["https://ui.example"],"AllowedHeaders":["*"],"MaxAgeSeconds":120}]}`
-		putResp := adminDo(t, adminRequest(t, http.MethodPut, "/s3/"+bucket+"?cors",
+		putResp := adminDo(t, adminRequest(t, http.MethodPut, "/api/s3/"+bucket+"?cors",
 			[]byte(body), ctJSON))
 		_ = readAllClose(t, putResp)
 		if putResp.StatusCode != http.StatusOK {
@@ -612,7 +612,7 @@ func TestCrossSurfaceParity(t *testing.T) {
 		putBucketAdmin(t, bucket)
 
 		body := fmt.Sprintf(`{"CORSRules":[{"AllowedMethods":["GET","PUT"],"AllowedOrigins":[%q],"AllowedHeaders":["*"]}]}`, originTrusted)
-		putResp := adminDo(t, adminRequest(t, http.MethodPut, "/s3/"+bucket+"?cors",
+		putResp := adminDo(t, adminRequest(t, http.MethodPut, "/api/s3/"+bucket+"?cors",
 			[]byte(body), ctJSON))
 		_ = readAllClose(t, putResp)
 		if putResp.StatusCode != http.StatusOK {
@@ -663,7 +663,7 @@ func TestCrossSurfaceParity(t *testing.T) {
 		putBucketAdmin(t, bucket)
 
 		body := fmt.Sprintf(`{"CORSRules":[{"AllowedMethods":["GET"],"AllowedOrigins":[%q]}]}`, originTrusted)
-		putResp := adminDo(t, adminRequest(t, http.MethodPut, "/s3/"+bucket+"?cors",
+		putResp := adminDo(t, adminRequest(t, http.MethodPut, "/api/s3/"+bucket+"?cors",
 			[]byte(body), ctJSON))
 		_ = readAllClose(t, putResp)
 		if putResp.StatusCode != http.StatusOK {
@@ -686,7 +686,7 @@ func TestCrossSurfaceParity(t *testing.T) {
 			t.Fatalf("pre-delete ACAO = %q; want trusted (status=%d)", got, r1.StatusCode)
 		}
 
-		delResp := adminDo(t, adminRequest(t, http.MethodDelete, "/s3/"+bucket+"?cors", nil, ""))
+		delResp := adminDo(t, adminRequest(t, http.MethodDelete, "/api/s3/"+bucket+"?cors", nil, ""))
 		_ = readAllClose(t, delResp)
 		if delResp.StatusCode != http.StatusNoContent {
 			t.Fatalf("admin DELETE cors = %d", delResp.StatusCode)
