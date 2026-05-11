@@ -3,7 +3,7 @@
 # =========================================================
 
 # Stage 1: build the React admin UI bundle.
-FROM node:20-alpine AS ui
+FROM node:24-alpine AS ui
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -11,7 +11,7 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: build the Go binary with the bundled UI embedded via go:embed.
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
