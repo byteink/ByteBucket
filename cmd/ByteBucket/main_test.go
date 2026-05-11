@@ -5,6 +5,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -96,4 +98,79 @@ func waitForHTTP(t *testing.T, url string) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("server at %s never became ready", url)
+}
+
+// TestRunHealthCheckPassesOnAllOK locks the happy path: every probe sees a 200
+// so the function must return nil. Two servers (not one) so the loop body is
+// actually exercised - a regression that returns after the first probe would
+// pass a single-URL test.
+func TestRunHealthCheckPassesOnAllOK(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	a := httptest.NewServer(ok)
+	defer a.Close()
+	b := httptest.NewServer(ok)
+	defer b.Close()
+
+	if err := runHealthCheck([]string{a.URL + "/health", b.URL + "/health"}); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+// TestRunHealthCheckFailsOnNon200 guards against a server that answers but is
+// not actually serving traffic (e.g. 503 during a drain). Anything other than
+// 200 must surface as a failure so the orchestrator restarts the container.
+func TestRunHealthCheckFailsOnNon200(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer s.Close()
+
+	err := runHealthCheck([]string{s.URL + "/health"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Fatalf("expected status code in error, got %v", err)
+	}
+}
+
+// TestRunHealthCheckFailsOnUnreachable covers the case where the server is not
+// listening at all - a closed port refuses immediately and must produce an
+// error rather than silently passing.
+func TestRunHealthCheckFailsOnUnreachable(t *testing.T) {
+	// Reserve and immediately release a port so the address is well-formed but
+	// nothing is listening. Beats a hard-coded port that might collide with a
+	// real service on the developer's machine.
+	addr := reserveAddr(t)
+
+	err := runHealthCheck([]string{"http://" + addr + "/health"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+// TestRunHealthCheckShortCircuitsOnFirstFailure asserts that a failing probe
+// stops the loop. Without this, a slow second probe could mask the first
+// failure's latency in the unhealthy transition path.
+func TestRunHealthCheckShortCircuitsOnFirstFailure(t *testing.T) {
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer bad.Close()
+
+	var secondCalled bool
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		secondCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer good.Close()
+
+	if err := runHealthCheck([]string{bad.URL + "/health", good.URL + "/health"}); err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if secondCalled {
+		t.Fatal("second probe should not have been called after first failure")
+	}
 }

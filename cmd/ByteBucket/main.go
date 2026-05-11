@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -99,7 +100,62 @@ func ensureDirectoriesExist() error {
 	return nil
 }
 
+// Default loopback endpoints the in-container Docker HEALTHCHECK probes. They
+// live as a package-level slice so tests can swap them for an httptest server
+// without exposing a CLI flag — surfacing the URL would invite operators to
+// point the probe at the wrong host and silently mask real failures.
+var healthCheckURLs = []string{
+	"http://127.0.0.1:9000/health",
+	"http://127.0.0.1:9001/health",
+}
+
+// healthCheckTimeout bounds each probe. Kept tight because Docker invokes the
+// probe on a 30s interval; any value above ~5s starts to delay the unhealthy
+// transition past one full interval and defeats the point of the check.
+const healthCheckTimeout = 3 * time.Second
+
+// runHealthCheck probes every URL in sequence and returns the first failure.
+// Sequential (not parallel) because the probe runs every 30s, the checks are
+// loopback-cheap, and parallel errors would obscure which surface broke.
+func runHealthCheck(urls []string) error {
+	client := &http.Client{Timeout: healthCheckTimeout}
+	for _, url := range urls {
+		if err := probeHealth(client, url); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// probeHealth issues a single GET and treats anything other than a 200 as a
+// failure. The body is drained-and-discarded so the connection can be reused
+// by a future probe even though we never keep it warm in practice.
+func probeHealth(client *http.Client, url string) error {
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("%s: %w", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s: status %d", url, resp.StatusCode)
+	}
+	return nil
+}
+
 func main() {
+	// Healthcheck is routed before any other startup so the Docker probe stays
+	// cheap and side-effect-free: no logger, no /data, no UserStore, no signal
+	// handlers. Just a tiny HTTP client. Anything heavier would multiply the
+	// per-interval cost and risk a probe failure on transient init state that
+	// has nothing to do with whether the running servers are healthy.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		if err := runHealthCheck(healthCheckURLs); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Install the structured logger before any other startup work so every
 	// subsequent message — including directory creation and credential
 	// bootstrapping — flows through the configured handler.
