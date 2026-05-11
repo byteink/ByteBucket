@@ -84,11 +84,13 @@ func CreateBucketHandler(c *gin.Context) {
 // ListBucketsHandler returns a list of buckets.
 func ListBucketsHandler(c *gin.Context) {
 	entries, err := os.ReadDir(objectsRoot)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		respondError(c, http.StatusInternalServerError, "InternalError",
 			fmt.Sprintf("Error listing buckets: %v", err))
 		return
 	}
+	// A missing objectsRoot is the normal pre-first-bucket state and the
+	// post-delete-all-buckets state: both must report an empty list, not 500.
 
 	type Bucket struct {
 		Name         string `xml:"Name" json:"name"`

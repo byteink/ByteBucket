@@ -71,6 +71,45 @@ func TestListBucketsHandlerUsesAuthenticatedOwner(t *testing.T) {
 	}
 }
 
+// ListBucketsHandler must report an empty list (not 500) when no bucket has
+// ever been created. The objectsRoot directory is created lazily on first
+// CreateBucket, and DeleteBucket can leave the parent absent if the last
+// bucket is removed. Both states are normal and must produce 200, not the
+// "open /data/objects: no such file or directory" the admin UI used to show.
+func TestListBucketsHandlerEmptyWhenObjectsRootMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	parent := t.TempDir()
+	missing := filepath.Join(parent, "objects-not-yet-created")
+	orig := objectsRoot
+	objectsRoot = missing
+	t.Cleanup(func() { objectsRoot = orig })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Set("user", &storage.User{AccessKeyID: "AKIAEXAMPLE"})
+
+	ListBucketsHandler(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var parsed struct {
+		XMLName xml.Name `xml:"ListAllMyBucketsResult"`
+		Buckets struct {
+			Bucket []struct {
+				Name string `xml:"Name"`
+			} `xml:"Bucket"`
+		} `xml:"Buckets"`
+	}
+	if err := xml.Unmarshal(w.Body.Bytes(), &parsed); err != nil {
+		t.Fatalf("xml parse: %v; body=%s", err, w.Body.String())
+	}
+	if len(parsed.Buckets.Bucket) != 0 {
+		t.Fatalf("expected zero buckets, got %d", len(parsed.Buckets.Bucket))
+	}
+}
+
 // expectedETag returns the S3-wire-format ETag for a byte slice: the hex md5
 // wrapped in literal double quotes. Tests pin this format because SDKs
 // pattern-match it verbatim.
