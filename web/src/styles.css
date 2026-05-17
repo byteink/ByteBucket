@@ -1,6 +1,23 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Tailwind 4 inverts the configuration model: theme tokens are declared
+ * inline in CSS via @theme, and the @import line replaces the trio of
+ * @tailwind directives used in Tailwind 3. Content scanning is automatic
+ * by default, so tailwind.config.js is no longer needed.
+ */
+@import "tailwindcss";
+
+@theme {
+  --color-ink-0: #ffffff;
+  --color-ink-50: #f7f7f8;
+  --color-ink-100: #eeeef0;
+  --color-ink-200: #d9d9de;
+  --color-ink-300: #b8b8c0;
+  --color-ink-500: #6b6b75;
+  --color-ink-700: #2a2a30;
+  --color-ink-900: #0a0a0c;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
 
 @layer base {
   html,
