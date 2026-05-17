@@ -9,6 +9,7 @@ make ui                                    # install web deps + build React bund
 make build                                 # produce ./build/ByteBucket (after make ui)
 make test                                  # go test -count=1 ./...
 make vet                                   # go vet ./...
+make pentest                               # black-box DAST: docker-compose with bytebucket + attacker container
 
 go run ./cmd/ByteBucket                    # local server (needs ENCRYPTION_KEY, ACCESS_KEY_ID, SECRET_ACCESS_KEY env vars)
 go test -count=1 ./internal/handlers/      # unit tests for one package
@@ -79,6 +80,7 @@ Two canned values only: `private` and `public-read`. Resolution precedence: obje
 - Errors flow through `respondError`; do not write error bodies directly.
 - Test fixtures use BoltDB-style isolation: `t.TempDir()` plus `storage.ObjectsRoot = dir` + `t.Cleanup(...)`. There are two roots (`storage.ObjectsRoot` and the handler-package `objectsRoot`); when seeding bucket data in a handler test, set both.
 - `go vet ./...` and `go test -count=1 ./...` must be green before every commit.
+- **Every feature that adds or changes an attacker-reachable surface must add at least one probe to `scripts/pentest/probes.sh` before merge.** That includes new HTTP routes, new subresources (`?something`), new auth or ACL paths, and any change that touches name validation or sidecar handling. The probe asserts both the negative case (hostile input → 4xx) and a positive regression case (good input still works). `make pentest` must be green; the release preflight gates on it. See `scripts/pentest/README.md` for the patterns to imitate.
 
 ## Release flow
 

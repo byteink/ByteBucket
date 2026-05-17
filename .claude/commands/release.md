@@ -43,6 +43,7 @@ Stop and report on the first failure:
   ```
 - Tests must pass: `go test -count=1 ./...` (runs the full suite including the testcontainers E2E — it takes ~30-60s on a warm cache).
 - `go vet ./...` must be clean.
+- `make pentest` must be clean. This brings up an isolated bytebucket container plus an attacker container that runs the black-box probe suite at `scripts/pentest/probes.sh`. Any regression in path-traversal, sidecar-clobber, anonymous-write-boundary, or presigned-URL integrity fails the release. Needs Docker; first run is slow because it builds the image. Set `SKIP_PENTEST=1` only if Docker is genuinely unavailable on the release host — never to mask a failure.
 
 If anything fails, surface it clearly and stop. Do not try to "fix" a dirty tree or a stale branch by stashing / rebasing silently.
 
