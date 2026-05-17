@@ -38,6 +38,12 @@ func NewStorageRouter() *gin.Engine {
 	// policy anymore.
 	r.Use(middleware.BucketCORSMiddleware())
 
+	// Validate bucket/object names BEFORE auth so the anonymous-read branch
+	// of AuthMiddleware never sees an unvalidated identifier — otherwise a
+	// crafted URL-encoded ".." segment could escape ObjectsRoot when auth
+	// constructs the file path for its ACL lookup.
+	r.Use(middleware.ValidateNames())
+
 	// All S3 operations below require SigV4 authentication. AuthMiddleware
 	// publishes the authenticated user on the Gin context; the shared storage
 	// handlers read it from there.

@@ -92,20 +92,33 @@ func cleanObjectKey(c *gin.Context) string {
 	return strings.TrimPrefix(filepath.Clean(c.Param("objectKey")), "/")
 }
 
-// collectUserMetadata extracts x-amz-meta-* headers from the request, exactly
-// mirroring the single-PUT path so multipart-uploaded objects expose the same
-// metadata shape on GET/HEAD as single-PUT ones.
-func collectUserMetadata(c *gin.Context) map[string]string {
+// userMetadataMaxBytes is the combined size cap on x-amz-meta-* headers
+// (names + values). AWS's documented S3 ceiling is 2 KiB for user-defined
+// metadata; we honour the same so a hostile client cannot inflate the
+// .meta sidecar to MBs with garbage headers and use disk as a side channel.
+const userMetadataMaxBytes = 2 * 1024
+
+// collectUserMetadataChecked extracts x-amz-meta-* headers from the request
+// while enforcing the total-size cap. Returns an error when the cap is
+// exceeded so the caller can map it to a protocol error. Mirrors the
+// single-PUT and multipart contract so both paths share one accounting rule.
+func collectUserMetadataChecked(c *gin.Context) (map[string]string, error) {
 	out := map[string]string{}
+	total := 0
 	for k, v := range c.Request.Header {
 		if len(v) == 0 {
 			continue
 		}
-		if strings.HasPrefix(strings.ToLower(k), "x-amz-meta-") {
-			out[k] = v[0]
+		if !strings.HasPrefix(strings.ToLower(k), "x-amz-meta-") {
+			continue
 		}
+		total += len(k) + len(v[0])
+		if total > userMetadataMaxBytes {
+			return nil, errors.New("user metadata too large")
+		}
+		out[k] = v[0]
 	}
-	return out
+	return out, nil
 }
 
 // CreateMultipartUploadHandler handles POST /:bucket/:key?uploads. The upload
@@ -118,7 +131,12 @@ func CreateMultipartUploadHandler(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "InvalidRequest", "Bucket and key required")
 		return
 	}
-	meta := collectUserMetadata(c)
+	meta, mErr := collectUserMetadataChecked(c)
+	if mErr != nil {
+		respondError(c, http.StatusBadRequest, "MetadataTooLarge",
+			"x-amz-meta-* headers exceed 2 KiB total")
+		return
+	}
 	if hdr := c.GetHeader("x-amz-acl"); hdr != "" {
 		canned, err := storage.NormalizeCannedACL(hdr)
 		if err != nil {

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"ByteBucket/internal/middleware"
 	"ByteBucket/internal/storage"
@@ -82,11 +81,11 @@ func UploadObjectHandler(c *gin.Context) {
 	checksumBase64 := base64.StdEncoding.EncodeToString(checksumBytes)
 	etag := formatETag(md5Hasher)
 
-	metadata := make(map[string]string)
-	for key, values := range c.Request.Header {
-		if strings.HasPrefix(strings.ToLower(key), "x-amz-meta-") {
-			metadata[key] = values[0]
-		}
+	metadata, mErr := collectUserMetadataChecked(c)
+	if mErr != nil {
+		respondError(c, http.StatusBadRequest, "MetadataTooLarge",
+			"x-amz-meta-* headers exceed 2 KiB total")
+		return
 	}
 	metadata["x-amz-checksum-crc32"] = checksumBase64
 	metadata[etagMetaKey] = etag

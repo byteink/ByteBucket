@@ -49,6 +49,11 @@ func NewAdminRouter() *gin.Engine {
 	// server route on a browser refresh.
 	api := r.Group("/api")
 	api.Use(auth.AdminAuthMiddleware)
+	// Validate any bucket/object identifier before handlers run. The check
+	// is idempotent with the per-route validator inside RegisterStorageRoutes;
+	// applied here so /api/s3 plus any future /api/* route that adds bucket
+	// params inherits the same hardening without remembering to opt in.
+	api.Use(middleware.ValidateNames())
 	{
 		api.GET("/config", handlers.GetConfigHandler)
 		api.POST("/users", handlers.CreateUserHandler)

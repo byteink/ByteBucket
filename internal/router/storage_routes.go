@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"ByteBucket/internal/handlers"
+	"ByteBucket/internal/middleware"
 
 	"github.com/gin-gonic/gin"
 )
@@ -21,23 +22,29 @@ func RegisterStorageRoutes(g gin.IRouter) {
 	// Gin's RedirectTrailingSlash handles the no-slash admin form.
 	g.GET("/", handlers.ListBucketsHandler)
 
+	// Every route below carries a :bucket or :bucket/*objectKey parameter
+	// that is attacker-controlled. ValidateNames runs before the dispatch
+	// to reject malformed names (path traversal, NUL bytes, reserved
+	// sidecar paths) so no handler ever sees an unvalidated identifier.
+	v := middleware.ValidateNames()
+
 	// Bucket-level operations. PUT/GET/DELETE /:bucket dispatches to the
 	// per-bucket CORS subresource handlers when "?cors" is present; this
 	// preserves the S3 wire shape where subresources live on the query
 	// string rather than as distinct path segments.
-	g.PUT("/:bucket", dispatchBucketSubresource(handlers.CreateBucketHandler, http.MethodPut))
-	g.GET("/:bucket", dispatchBucketSubresource(handlers.ListObjectsHandler, http.MethodGet))
-	g.DELETE("/:bucket", dispatchBucketSubresource(handlers.DeleteBucketHandler, http.MethodDelete))
-	g.HEAD("/:bucket", handlers.HeadBucketHandler)
+	g.PUT("/:bucket", v, dispatchBucketSubresource(handlers.CreateBucketHandler, http.MethodPut))
+	g.GET("/:bucket", v, dispatchBucketSubresource(handlers.ListObjectsHandler, http.MethodGet))
+	g.DELETE("/:bucket", v, dispatchBucketSubresource(handlers.DeleteBucketHandler, http.MethodDelete))
+	g.HEAD("/:bucket", v, handlers.HeadBucketHandler)
 
 	// Object-level operations. Because Gin's routing does not split on "/"
 	// for wildcard paths, an empty object key (trailing slash on /:bucket/)
 	// has historically been treated as a bucket-level operation; keep that.
-	g.PUT("/:bucket/*objectKey", dispatchObjectPUT)
-	g.GET("/:bucket/*objectKey", dispatchObjectGET)
-	g.DELETE("/:bucket/*objectKey", dispatchObjectDELETE)
-	g.POST("/:bucket/*objectKey", dispatchObjectPOST)
-	g.HEAD("/:bucket/*objectKey", func(c *gin.Context) {
+	g.PUT("/:bucket/*objectKey", v, dispatchObjectPUT)
+	g.GET("/:bucket/*objectKey", v, dispatchObjectGET)
+	g.DELETE("/:bucket/*objectKey", v, dispatchObjectDELETE)
+	g.POST("/:bucket/*objectKey", v, dispatchObjectPOST)
+	g.HEAD("/:bucket/*objectKey", v, func(c *gin.Context) {
 		objectKey := c.Param("objectKey")
 		if objectKey == "" || objectKey == "/" {
 			handlers.HeadBucketHandler(c)

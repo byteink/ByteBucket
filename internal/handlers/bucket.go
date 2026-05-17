@@ -33,8 +33,9 @@ var objectsRoot = "/data/objects"
 // respondError so the admin surface sees JSON while SigV4 callers see XML.
 func CreateBucketHandler(c *gin.Context) {
 	bucketName := c.Param("bucket")
-	if bucketName == "" {
-		respondError(c, http.StatusBadRequest, "InvalidBucketName", "Bucket name required")
+	if err := storage.ValidateBucketName(bucketName); err != nil {
+		respondError(c, http.StatusBadRequest, "InvalidBucketName",
+			"Bucket name must be 3-63 chars, lowercase alphanumeric and hyphens, starting and ending alphanumeric")
 		return
 	}
 
