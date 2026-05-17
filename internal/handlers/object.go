@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"ByteBucket/internal/middleware"
 	"ByteBucket/internal/storage"
@@ -90,6 +91,17 @@ func UploadObjectHandler(c *gin.Context) {
 	metadata["x-amz-checksum-crc32"] = checksumBase64
 	metadata[etagMetaKey] = etag
 	metadata["Content-Length"] = strconv.FormatInt(written, 10)
+	// Preserve the client-supplied Content-Type so GET emits a stable
+	// value. Without this the response carried no Content-Type at all,
+	// inviting MIME sniffing — combined with public-read that is a
+	// stored-XSS vector for any HTML payload. Default to
+	// application/octet-stream so SDKs that omit the header still get
+	// a sane non-sniffable value paired with nosniff at GET time.
+	if ct := strings.TrimSpace(c.GetHeader("Content-Type")); ct != "" {
+		metadata["Content-Type"] = ct
+	} else {
+		metadata["Content-Type"] = "application/octet-stream"
+	}
 	if cannedACL != "" {
 		metadata["acl"] = cannedACL
 	}
@@ -129,6 +141,12 @@ func DownloadObjectHandler(c *gin.Context) {
 		respondError(c, http.StatusNotFound, "NoSuchKey", "Object not found")
 		return
 	}
+
+	// Browsers must not MIME-sniff stored bytes. Without nosniff an attacker
+	// with write access to a public-read bucket could upload an HTML payload
+	// labelled as image/jpeg and have any viewer execute it inline. Set
+	// before emitting the file so even an early flush carries it.
+	c.Header("X-Content-Type-Options", "nosniff")
 
 	// Backfill the ETag before emitting headers so legacy objects — written
 	// before ETag persistence — still return a correct, wire-shaped value.
@@ -211,6 +229,11 @@ func GetObjectMetadataHandler(c *gin.Context) {
 
 	objectPath := filepath.Join(objectsRoot, bucketName, objectKey)
 	metadataPath := objectPath + ".meta"
+
+	// Same nosniff guard as DownloadObjectHandler — HEAD must mirror the
+	// security headers GET would emit so clients that probe with HEAD
+	// before downloading do not see inconsistent guarantees.
+	c.Header("X-Content-Type-Options", "nosniff")
 
 	if _, err := os.Stat(metadataPath); os.IsNotExist(err) {
 		respondError(c, http.StatusNotFound, "NoSuchKey", "Metadata not found")

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // ErrInvalidBucketName is returned when a bucket name does not satisfy the
@@ -88,7 +89,23 @@ func ValidateObjectKey(key string) (string, error) {
 	if key == "" {
 		return "", ErrInvalidObjectKey
 	}
-	if strings.ContainsRune(key, 0) {
+	// Reject any C0 control byte (0x00-0x1F) or DEL (0x7F). These would
+	// otherwise survive URL decoding and end up in response headers /
+	// logs / filesystem paths. AWS S3 documents that object keys may
+	// "contain any sequence of Unicode characters" but the same docs
+	// recommend avoiding control characters; we reject them outright
+	// because they have zero legitimate use and high abuse potential
+	// (response splitting, log injection, filesystem oddities).
+	for _, b := range []byte(key) {
+		if b < 0x20 || b == 0x7F {
+			return "", ErrInvalidObjectKey
+		}
+	}
+	// Reject invalid UTF-8. Overlong encodings (e.g. \xC0\xAF for "/")
+	// historically bypassed path filters that decode AFTER validation.
+	// Rejecting at the boundary closes that whole class — every legal
+	// key in 2026 is well-formed UTF-8.
+	if !utf8.ValidString(key) {
 		return "", ErrInvalidObjectKey
 	}
 	// Strip a single leading slash to match the wire-shape AWS accepts but

@@ -54,6 +54,24 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Defence-in-depth headers for every SPA response:
+	//   X-Frame-Options:DENY  — the admin UI must never be framed, so a
+	//     clickjacked page cannot trick an admin into invoking a button.
+	//   X-Content-Type-Options:nosniff — pair with the explicit
+	//     Content-Type below so browsers do not second-guess our typing.
+	//   Referrer-Policy:no-referrer — admin URLs never leak via outbound
+	//     links (e.g. the user clicks an external help link from the UI).
+	//   Content-Security-Policy — restrict to same-origin assets, no
+	//     inline scripts beyond what Vite already inlines (sha-pinned by
+	//     'self' here keeps the door closed for stored-XSS routed through
+	//     anywhere on the admin origin).
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "+
+			"script-src 'self'; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'")
+
 	clean := path.Clean("/" + strings.TrimPrefix(r.URL.Path, "/"))
 	if clean == "/" {
 		h.serveIndex(w, r)
