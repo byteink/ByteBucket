@@ -1,11 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { createBucket, deleteBucket, listBuckets } from '../lib/s3';
+import {
+  createBucket,
+  deleteBucket,
+  listBuckets,
+  putBucketACL,
+  type CannedACL,
+} from '../lib/s3';
 import { loadSession } from '../lib/session';
 
 interface BucketRow {
   name: string;
   created?: string;
+  acl: CannedACL;
 }
 
 export default function BucketsPage() {
@@ -25,6 +32,7 @@ export default function BucketsPage() {
           created: b.creationDate
             ? new Date(b.creationDate).toISOString().slice(0, 10)
             : undefined,
+          acl: b.acl ?? 'private',
         })),
       );
     } catch (e) {
@@ -53,6 +61,26 @@ export default function BucketsPage() {
     if (!window.confirm(`Delete bucket ${name}? It must be empty.`)) return;
     try {
       await deleteBucket(session, name);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // Promoting a bucket to public-read makes every non-overridden object
+  // anonymously downloadable. We gate this behind a single confirm so an
+  // accidental click cannot silently widen access to the whole bucket.
+  async function onToggleACL(name: string, current: CannedACL) {
+    if (!session) return;
+    const next: CannedACL = current === 'public-read' ? 'private' : 'public-read';
+    if (next === 'public-read') {
+      const ok = window.confirm(
+        `Make bucket "${name}" public?\n\nAnyone with the URL will be able to list and download every non-overridden object. Continue?`,
+      );
+      if (!ok) return;
+    }
+    try {
+      await putBucketACL(session, name, next);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -88,7 +116,8 @@ export default function BucketsPage() {
             <tr className="text-left border-b border-ink-200 text-ink-500">
               <th className="table-cell font-normal">Name</th>
               <th className="table-cell font-normal">Created</th>
-              <th className="table-cell font-normal w-56"></th>
+              <th className="table-cell font-normal">Visibility</th>
+              <th className="table-cell font-normal w-72"></th>
             </tr>
           </thead>
           <tbody>
@@ -100,7 +129,22 @@ export default function BucketsPage() {
                   </Link>
                 </td>
                 <td className="table-cell text-xs text-ink-500">{b.created ?? '-'}</td>
+                <td className="table-cell text-xs">
+                  {b.acl === 'public-read' ? (
+                    <span className="inline-block px-2 py-0.5 border border-ink-900 text-ink-900 uppercase tracking-wide text-[10px]">
+                      Public
+                    </span>
+                  ) : (
+                    <span className="text-ink-500">Private</span>
+                  )}
+                </td>
                 <td className="table-cell text-right">
+                  <button
+                    className="btn h-7 px-2 text-xs mr-2 inline-flex items-center"
+                    onClick={() => onToggleACL(b.name, b.acl)}
+                  >
+                    {b.acl === 'public-read' ? 'Make private' : 'Make public'}
+                  </button>
                   <Link
                     to={`/buckets/${encodeURIComponent(b.name)}/cors`}
                     className="btn h-7 px-2 text-xs mr-2 inline-flex items-center"

@@ -47,11 +47,12 @@ func RegisterStorageRoutes(g gin.IRouter) {
 	})
 }
 
-// dispatchObjectPUT routes object-level PUTs between single-PUT uploads and
-// UploadPart (multipart). The "uploadId" + "partNumber" query params are the
-// S3-defined disambiguators; presence of both flips us onto the multipart
-// path. An empty object key falls through to CreateBucket, matching the
-// historical behaviour of trailing-slash bucket addressing.
+// dispatchObjectPUT routes object-level PUTs between single-PUT uploads,
+// UploadPart (multipart), and the ?acl subresource. The "uploadId" +
+// "partNumber" query params are the S3-defined disambiguators; presence of
+// both flips us onto the multipart path. An empty object key falls through
+// to CreateBucket, matching the historical behaviour of trailing-slash
+// bucket addressing.
 func dispatchObjectPUT(c *gin.Context) {
 	objectKey := c.Param("objectKey")
 	if objectKey == "" || objectKey == "/" {
@@ -59,6 +60,10 @@ func dispatchObjectPUT(c *gin.Context) {
 		return
 	}
 	q := c.Request.URL.Query()
+	if _, ok := q["acl"]; ok {
+		handlers.PutObjectACLHandler(c)
+		return
+	}
 	if q.Get("uploadId") != "" && q.Get("partNumber") != "" {
 		handlers.UploadPartHandler(c)
 		return
@@ -66,9 +71,15 @@ func dispatchObjectPUT(c *gin.Context) {
 	handlers.UploadObjectHandler(c)
 }
 
-// dispatchObjectGET routes GET between plain downloads and ListParts.
+// dispatchObjectGET routes GET between plain downloads, ListParts, and the
+// ?acl subresource.
 func dispatchObjectGET(c *gin.Context) {
-	if c.Request.URL.Query().Get("uploadId") != "" {
+	q := c.Request.URL.Query()
+	if _, ok := q["acl"]; ok {
+		handlers.GetObjectACLHandler(c)
+		return
+	}
+	if q.Get("uploadId") != "" {
 		handlers.ListPartsHandler(c)
 		return
 	}
@@ -117,6 +128,15 @@ func dispatchBucketSubresource(defaultHandler gin.HandlerFunc, method string) gi
 				handlers.GetBucketCORSHandler(c)
 			case http.MethodDelete:
 				handlers.DeleteBucketCORSHandler(c)
+			}
+			return
+		}
+		if _, ok := q["acl"]; ok {
+			switch method {
+			case http.MethodPut:
+				handlers.PutBucketACLHandler(c)
+			case http.MethodGet:
+				handlers.GetBucketACLHandler(c)
 			}
 			return
 		}

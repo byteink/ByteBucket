@@ -8,9 +8,12 @@
 
 import type { Session } from './session';
 
+export type CannedACL = 'private' | 'public-read';
+
 export interface Bucket {
   name: string;
   creationDate?: string;
+  acl?: CannedACL;
 }
 
 export interface S3Object {
@@ -19,6 +22,8 @@ export interface S3Object {
   lastModified?: string;
   etag?: string;
   storageClass?: string;
+  acl?: CannedACL;
+  aclSource?: 'object' | 'bucket' | 'default';
 }
 
 export interface BucketCORSRule {
@@ -176,6 +181,45 @@ export async function putBucketCORS(
     headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
     body: JSON.stringify(cfg),
   });
+  if (!res.ok) await throwHTTP(res);
+}
+
+export async function putBucketACL(
+  s: Session,
+  bucket: string,
+  canned: CannedACL,
+): Promise<void> {
+  const res = await fetch(`/api/s3/${encodeURIComponent(bucket)}?acl`, {
+    method: 'PUT',
+    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ canned }),
+  });
+  if (!res.ok) await throwHTTP(res);
+}
+
+export async function getBucketACL(s: Session, bucket: string): Promise<CannedACL> {
+  const res = await fetch(`/api/s3/${encodeURIComponent(bucket)}?acl`, {
+    headers: authHeaders(s),
+  });
+  if (!res.ok) await throwHTTP(res);
+  const body = (await res.json()) as { canned?: CannedACL };
+  return body.canned ?? 'private';
+}
+
+export async function putObjectACL(
+  s: Session,
+  bucket: string,
+  key: string,
+  canned: CannedACL,
+): Promise<void> {
+  const res = await fetch(
+    `/api/s3/${encodeURIComponent(bucket)}/${encPath(key.split('/'))}?acl`,
+    {
+      method: 'PUT',
+      headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ canned }),
+    },
+  );
   if (!res.ok) await throwHTTP(res);
 }
 

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -147,7 +148,70 @@ func AuthMiddleware(c *gin.Context) {
 		return
 	}
 
+	// No SigV4 credentials at all: try the anonymous-read path. Returns true
+	// when the resource is public-read and the request is a permitted
+	// shape (GET/HEAD on a real bucket or object, no subresources). On
+	// success the handler chain continues with authMethod="anonymous".
+	if allowAnonymousRead(c) {
+		return
+	}
+
 	abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Missing authentication information")
+}
+
+// allowAnonymousRead permits unauthenticated GET/HEAD against resources whose
+// effective ACL grants public-read. It is the ONLY anonymous entry point in
+// the server: every write, listing of buckets, multipart, subresource, or
+// non-GET/HEAD method is rejected here, so a future ACL bug cannot promote a
+// public-read object into a public-write one.
+//
+// The function returns true when it has fully handled the request (either by
+// calling c.Next or by aborting with an error), and false when the caller
+// should fall through to the default "missing auth" error path.
+func allowAnonymousRead(c *gin.Context) bool {
+	method := c.Request.Method
+	if method != http.MethodGet && method != http.MethodHead {
+		return false
+	}
+	// Reject every subresource for anonymous callers. Bucket policy reads
+	// and ACL inspection require identity in S3, and ?uploads/?cors leak
+	// internal state. We list the safe subresources explicitly rather than
+	// blocklisting unsafe ones; blocklists rot as new subresources land.
+	for key := range c.Request.URL.Query() {
+		switch strings.ToLower(key) {
+		case "prefix", "marker", "max-keys", "delimiter", "encoding-type",
+			"list-type", "continuation-token", "start-after", "fetch-owner":
+			// listing pagination — safe
+		default:
+			return false
+		}
+	}
+
+	bucket := c.Param("bucket")
+	if bucket == "" {
+		// Root path (ListBuckets) is never anonymous.
+		return false
+	}
+	rawKey := c.Param("objectKey")
+	key := strings.TrimPrefix(rawKey, "/")
+
+	// Resolve effective ACL. Object-level lookup falls back to bucket ACL,
+	// so the bucket-level "public-read" toggle naturally covers all
+	// non-overridden objects.
+	var effective string
+	var err error
+	if key == "" {
+		effective, err = storage.EffectiveBucketACL(bucket)
+	} else {
+		effective, err = storage.EffectiveObjectACL(bucket, filepath.Join(storage.ObjectsRoot, bucket, key))
+	}
+	if err != nil || !storage.IsPublicRead(effective) {
+		return false
+	}
+
+	c.Set("authMethod", "anonymous")
+	c.Next()
+	return true
 }
 
 // processHeaderAuth handles signature validation when an Authorization header is provided.

@@ -118,7 +118,16 @@ func CreateMultipartUploadHandler(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "InvalidRequest", "Bucket and key required")
 		return
 	}
-	up, err := storage.CreateMultipartUpload(bucket, key, collectUserMetadata(c))
+	meta := collectUserMetadata(c)
+	if hdr := c.GetHeader("x-amz-acl"); hdr != "" {
+		canned, err := storage.NormalizeCannedACL(hdr)
+		if err != nil {
+			respondError(c, http.StatusBadRequest, "InvalidArgument", "Unsupported x-amz-acl value")
+			return
+		}
+		meta["acl"] = canned
+	}
+	up, err := storage.CreateMultipartUpload(bucket, key, meta)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Failed to initiate multipart upload")
 		return

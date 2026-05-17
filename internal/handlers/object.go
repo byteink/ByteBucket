@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"ByteBucket/internal/middleware"
+	"ByteBucket/internal/storage"
 
 	"github.com/goccy/go-json"
 
@@ -24,6 +25,21 @@ func UploadObjectHandler(c *gin.Context) {
 	bucketName := c.Param("bucket")
 	objectKey := c.Param("objectKey")
 	objectKey = filepath.Clean(objectKey)
+
+	// Resolve the canned ACL (if any) up-front so an invalid value rejects
+	// the request before we spend IO writing the body. An empty header means
+	// the object inherits the bucket ACL, so we only persist a value when the
+	// client explicitly set one.
+	aclHeader := c.GetHeader("x-amz-acl")
+	cannedACL := ""
+	if aclHeader != "" {
+		normalized, err := storage.NormalizeCannedACL(aclHeader)
+		if err != nil {
+			respondError(c, http.StatusBadRequest, "InvalidArgument", "Unsupported x-amz-acl value")
+			return
+		}
+		cannedACL = normalized
+	}
 
 	bucketPath := filepath.Join(objectsRoot, bucketName)
 	if err := os.MkdirAll(bucketPath, 0755); err != nil {
@@ -75,6 +91,9 @@ func UploadObjectHandler(c *gin.Context) {
 	metadata["x-amz-checksum-crc32"] = checksumBase64
 	metadata[etagMetaKey] = etag
 	metadata["Content-Length"] = strconv.FormatInt(written, 10)
+	if cannedACL != "" {
+		metadata["acl"] = cannedACL
+	}
 
 	metadataPath := dstPath + ".meta"
 	metadataJSON, err := json.Marshal(metadata)

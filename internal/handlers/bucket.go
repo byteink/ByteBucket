@@ -69,6 +69,21 @@ func CreateBucketHandler(c *gin.Context) {
 		return
 	}
 
+	// Honour x-amz-acl at create time so SDK callers can publish a public
+	// bucket in a single round-trip. Absent header keeps the implicit
+	// "private" default — no sidecar is written, matching CORS behaviour.
+	if hdr := c.GetHeader("x-amz-acl"); hdr != "" {
+		canned, err := storage.NormalizeCannedACL(hdr)
+		if err != nil {
+			respondError(c, http.StatusBadRequest, "InvalidArgument", "Unsupported x-amz-acl value")
+			return
+		}
+		if err := storage.PutBucketACL(bucketName, &storage.BucketACL{Canned: canned}); err != nil {
+			respondError(c, http.StatusInternalServerError, "InternalError", "Error persisting bucket ACL")
+			return
+		}
+	}
+
 	if wantsJSON(c) {
 		c.JSON(http.StatusOK, gin.H{"location": fmt.Sprintf("http://%s/%s", c.Request.Host, bucketName)})
 		return
@@ -95,6 +110,7 @@ func ListBucketsHandler(c *gin.Context) {
 	type Bucket struct {
 		Name         string `xml:"Name" json:"name"`
 		CreationDate string `xml:"CreationDate" json:"creationDate"`
+		ACL          string `xml:"-" json:"acl,omitempty"`
 	}
 	var buckets []Bucket
 	for _, entry := range entries {
@@ -107,9 +123,20 @@ func ListBucketsHandler(c *gin.Context) {
 				fmt.Sprintf("Error getting info for bucket %s: %v", entry.Name(), err))
 			return
 		}
+		// Effective ACL is surfaced on the admin JSON view so the UI can
+		// render a visibility column without a second round-trip per row.
+		// XML (SigV4) callers do not see this field — S3 keeps ACL on the
+		// dedicated ?acl subresource and SDKs would not parse it here.
+		acl, err := storage.EffectiveBucketACL(entry.Name())
+		if err != nil {
+			respondError(c, http.StatusInternalServerError, "InternalError",
+				fmt.Sprintf("Error reading ACL for bucket %s: %v", entry.Name(), err))
+			return
+		}
 		buckets = append(buckets, Bucket{
 			Name:         entry.Name(),
 			CreationDate: info.ModTime().Format(time.RFC3339),
+			ACL:          acl,
 		})
 	}
 
@@ -193,16 +220,22 @@ func ListObjectsHandler(c *gin.Context) {
 		ETag         string `xml:"ETag" json:"etag"`
 		Size         int64  `xml:"Size" json:"size"`
 		StorageClass string `xml:"StorageClass" json:"storageClass"`
+		// ACL is the effective canned ACL after applying bucket inheritance.
+		// ACLSource is "object" when the object set its own value, "bucket"
+		// when inherited, or "default" when neither was set. Surfaced only
+		// on the admin JSON view; SigV4 XML omits it.
+		ACL       string `xml:"-" json:"acl,omitempty"`
+		ACLSource string `xml:"-" json:"aclSource,omitempty"`
 	}
 	var objects []ObjectInfo
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		// Skip sidecar metadata files and the per-bucket CORS subresource;
-		// neither are user-visible objects.
+		// Skip sidecar metadata files and the per-bucket CORS/ACL
+		// subresources; none are user-visible objects.
 		name := entry.Name()
-		if strings.HasSuffix(name, ".meta") || name == ".cors.json" {
+		if strings.HasSuffix(name, ".meta") || name == ".cors.json" || name == ".acl.json" {
 			continue
 		}
 		info, err := entry.Info()
@@ -218,12 +251,20 @@ func ListObjectsHandler(c *gin.Context) {
 				fmt.Sprintf("Error resolving ETag for %s: %v", name, err))
 			return
 		}
+		acl, aclSrc, err := storage.ResolveObjectACL(bucketName, filepath.Join(bucketPath, name))
+		if err != nil {
+			respondError(c, http.StatusInternalServerError, "InternalError",
+				fmt.Sprintf("Error resolving ACL for %s: %v", name, err))
+			return
+		}
 		objects = append(objects, ObjectInfo{
 			Key:          name,
 			LastModified: info.ModTime().Format(time.RFC3339),
 			ETag:         etag,
 			Size:         info.Size(),
 			StorageClass: "STANDARD",
+			ACL:          acl,
+			ACLSource:    aclSrc,
 		})
 	}
 
