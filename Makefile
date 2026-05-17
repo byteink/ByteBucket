@@ -1,4 +1,4 @@
-.PHONY: ui dev build test vet pentest clean
+.PHONY: ui dev build test vet pentest image-scan clean
 
 WEB_DIR := web
 DIST_SRC := $(WEB_DIR)/dist
@@ -29,6 +29,25 @@ test:
 pentest:
 	@trap 'docker compose -f scripts/pentest/docker-compose.yml down -v --remove-orphans >/dev/null 2>&1' EXIT; \
 	docker compose -f scripts/pentest/docker-compose.yml up --build --abort-on-container-exit --exit-code-from pentest
+
+# image-scan builds the production image, then runs trivy against it inside
+# a throwaway container so no local trivy install is required. We gate on
+# HIGH and CRITICAL findings only — Go std lib advisories often land as
+# MEDIUM and would force a release-block on every weekly DB refresh.
+# The image-config check also flags running as root or missing HEALTHCHECK
+# so any future regression in Dockerfile hardening trips this target.
+IMAGE_TAG ?= bytebucket-scan:local
+image-scan:
+	docker build -f docker/Dockerfile -t $(IMAGE_TAG) .
+	docker run --rm \
+		-v /var/run/docker.sock:/var/run/docker.sock \
+		-v $(HOME)/.cache/trivy:/root/.cache/trivy \
+		aquasec/trivy:latest image \
+		--severity HIGH,CRITICAL \
+		--exit-code 1 \
+		--ignore-unfixed \
+		--scanners vuln,misconfig,secret \
+		$(IMAGE_TAG)
 
 clean:
 	rm -rf $(DIST_SRC) $(DIST_DST) $(WEB_DIR)/node_modules ./build

@@ -10,6 +10,7 @@ make build                                 # produce ./build/ByteBucket (after m
 make test                                  # go test -count=1 ./...
 make vet                                   # go vet ./...
 make pentest                               # black-box DAST: docker-compose with bytebucket + attacker container
+make image-scan                            # build prod image + Trivy scan (vuln/misconfig/secret, HIGH+CRITICAL gate)
 
 go run ./cmd/ByteBucket                    # local server (needs ENCRYPTION_KEY, ACCESS_KEY_ID, SECRET_ACCESS_KEY env vars)
 go test -count=1 ./internal/handlers/      # unit tests for one package
