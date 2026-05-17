@@ -50,6 +50,7 @@ func NewAdminRouter() *gin.Engine {
 	api := r.Group("/api")
 	api.Use(auth.AdminAuthMiddleware)
 	{
+		api.GET("/config", handlers.GetConfigHandler)
 		api.POST("/users", handlers.CreateUserHandler)
 		api.GET("/users", handlers.ListUsersHandler)
 		api.PUT("/users/:accessKeyID", handlers.UpdateUserHandler)

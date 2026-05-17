@@ -189,7 +189,17 @@ export default function ObjectsPage() {
           <tbody>
             {rows.map((o) => (
               <tr key={o.key} className="border-b border-ink-100">
-                <td className="table-cell font-mono text-xs break-all">{o.key}</td>
+                <td className="table-cell font-mono text-xs break-all">
+                  <Link
+                    className="hover:underline"
+                    to={`/buckets/${encodeURIComponent(bucket)}/objects/${o.key
+                      .split('/')
+                      .map((p) => encodeURIComponent(p))
+                      .join('/')}`}
+                  >
+                    {o.key}
+                  </Link>
+                </td>
                 <td className="table-cell text-xs text-ink-500">{formatSize(o.size)}</td>
                 <td className="table-cell text-xs text-ink-500">{o.modified ?? '-'}</td>
                 <td className="table-cell text-xs">{renderVisibility(o.acl, o.aclSource)}</td>

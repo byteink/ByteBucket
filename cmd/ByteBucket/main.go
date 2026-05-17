@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"ByteBucket/internal/handlers"
 	"ByteBucket/internal/middleware"
 	"ByteBucket/internal/router"
 	"ByteBucket/internal/storage"
@@ -227,6 +228,13 @@ func run(ctx context.Context) error {
 	if err := bootstrapSuperUser(); err != nil {
 		return err
 	}
+
+	// PUBLIC_BASE_URL is the public origin under which anonymous reads of
+	// public-read objects are served (e.g. https://bb.example.com). The
+	// admin UI uses it to render shareable links on the object detail page.
+	// Empty value is valid — the UI falls back to its current location and
+	// the operator sees "localhost" until they configure a real origin.
+	handlers.SetPublicBaseURL(os.Getenv("PUBLIC_BASE_URL"))
 
 	storageSrv := newServer(":9000", withBodyLimit(router.NewStorageRouter(), storageBodyLimit))
 	adminSrv := newServer(":9001", withBodyLimit(router.NewAdminRouter(), adminBodyLimit))

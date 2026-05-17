@@ -78,6 +78,44 @@ function encPath(parts: string[]): string {
   return parts.map((p) => encodeURIComponent(p)).join('/');
 }
 
+export interface ServerConfig {
+  publicBaseURL: string;
+}
+
+// getConfig surfaces operator-supplied runtime knobs (today: PUBLIC_BASE_URL).
+// Cached on the first successful call so every page that needs the public
+// origin does not refetch.
+let configCache: ServerConfig | null = null;
+export async function getConfig(s: Session): Promise<ServerConfig> {
+  if (configCache) return configCache;
+  const res = await fetch('/api/config', { headers: authHeaders(s) });
+  if (!res.ok) await throwHTTP(res);
+  configCache = (await res.json()) as ServerConfig;
+  return configCache;
+}
+
+// ObjectMetadata is the flattened HEAD response: keys are lowercased header
+// names (etag, content-type, content-length, acl, x-amz-meta-*). HEAD on the
+// admin surface goes through GetObjectMetadataHandler, which surfaces every
+// persisted sidecar field as a response header.
+export type ObjectMetadata = Record<string, string>;
+export async function getObjectMetadata(
+  s: Session,
+  bucket: string,
+  key: string,
+): Promise<ObjectMetadata> {
+  const res = await fetch(
+    `/api/s3/${encodeURIComponent(bucket)}/${encPath(key.split('/'))}`,
+    { method: 'HEAD', headers: authHeaders(s) },
+  );
+  if (!res.ok) await throwHTTP(res);
+  const out: ObjectMetadata = {};
+  res.headers.forEach((value, name) => {
+    out[name.toLowerCase()] = value;
+  });
+  return out;
+}
+
 export async function listBuckets(s: Session): Promise<Bucket[]> {
   const res = await fetch('/api/s3/', { headers: authHeaders(s) });
   if (!res.ok) await throwHTTP(res);
@@ -204,6 +242,30 @@ export async function getBucketACL(s: Session, bucket: string): Promise<CannedAC
   if (!res.ok) await throwHTTP(res);
   const body = (await res.json()) as { canned?: CannedACL };
   return body.canned ?? 'private';
+}
+
+export interface PresignedURL {
+  url: string;
+  expiresIn: number;
+  expiresAt: string;
+}
+
+// presignObject asks the server to mint a SigV4 GetObject URL valid for the
+// requested number of seconds. Server-side signing keeps the user's secret
+// out of the browser's signing path — the admin login already trusted us
+// with it, so this just centralises the canonical-request bookkeeping.
+export async function presignObject(
+  s: Session,
+  bucket: string,
+  key: string,
+  expiresSeconds: number,
+): Promise<PresignedURL> {
+  const res = await fetch(
+    `/api/s3/${encodeURIComponent(bucket)}/${encPath(key.split('/'))}?presign&expires=${expiresSeconds}`,
+    { headers: authHeaders(s) },
+  );
+  if (!res.ok) await throwHTTP(res);
+  return (await res.json()) as PresignedURL;
 }
 
 export async function putObjectACL(

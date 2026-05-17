@@ -5,6 +5,7 @@ import LoginPage from './pages/LoginPage';
 import UsersPage from './pages/UsersPage';
 import BucketsPage from './pages/BucketsPage';
 import ObjectsPage from './pages/ObjectsPage';
+import ObjectDetailPage from './pages/ObjectDetailPage';
 import BucketCORSPage from './pages/BucketCORSPage';
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
         <Route index element={<Navigate to="/buckets" replace />} />
         <Route path="/buckets" element={<BucketsPage />} />
         <Route path="/buckets/:name/objects" element={<ObjectsPage />} />
+        <Route path="/buckets/:name/objects/*" element={<ObjectDetailPage />} />
         <Route path="/buckets/:name/cors" element={<BucketCORSPage />} />
         <Route path="/users" element={<UsersPage />} />
       </Route>

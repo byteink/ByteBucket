@@ -71,12 +71,18 @@ func dispatchObjectPUT(c *gin.Context) {
 	handlers.UploadObjectHandler(c)
 }
 
-// dispatchObjectGET routes GET between plain downloads, ListParts, and the
-// ?acl subresource.
+// dispatchObjectGET routes GET between plain downloads, ListParts, the
+// ?acl subresource, and the ?presign admin-only operation. ?presign is not
+// a real S3 verb; we expose it here so the admin UI can generate a
+// time-limited download URL without reimplementing SigV4 in the browser.
 func dispatchObjectGET(c *gin.Context) {
 	q := c.Request.URL.Query()
 	if _, ok := q["acl"]; ok {
 		handlers.GetObjectACLHandler(c)
+		return
+	}
+	if _, ok := q["presign"]; ok {
+		handlers.PresignObjectHandler(c)
 		return
 	}
 	if q.Get("uploadId") != "" {
