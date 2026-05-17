@@ -87,6 +87,9 @@ func CreateBucketHandler(c *gin.Context) {
 			respondError(c, http.StatusInternalServerError, "InternalError", "Error persisting bucket ACL")
 			return
 		}
+		// Audit the ACL set at create time. Prior is always the implicit
+		// "private" default since the bucket did not exist a moment ago.
+		auditACLChange(c, "bucket", bucketName, "", storage.ACLPrivate, canned)
 	}
 
 	if wantsJSON(c) {
@@ -201,12 +204,55 @@ func DeleteBucketHandler(c *gin.Context) {
 		return
 	}
 
+	// Refuse to delete a non-empty bucket. The previous behaviour
+	// (os.RemoveAll without a check) made data loss one misclick away —
+	// a real concern for the parent-tracking deployments that hold
+	// irreplaceable photos. S3 returns BucketNotEmpty for the same case;
+	// matching that wire code keeps SDK semantics consistent and gives
+	// the UI a code to render a meaningful confirmation.
+	empty, err := bucketIsEmpty(bucketPath)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "InternalError", "Error reading bucket")
+		return
+	}
+	if !empty {
+		respondError(c, http.StatusConflict, "BucketNotEmpty",
+			"The bucket you tried to delete is not empty. Remove all objects first.")
+		return
+	}
+
 	if err := os.RemoveAll(bucketPath); err != nil {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Error deleting bucket")
 		return
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// bucketIsEmpty reports whether the bucket directory contains any
+// real object files. Per-bucket sidecars (.cors.json, .acl.json) are
+// ignored — they are server-managed state, not user-visible objects,
+// and would otherwise force the operator to clear ACL/CORS before
+// they could ever delete a bucket they just emptied through the UI.
+// Recurses one level deep using WalkDir because S3-style keys live in
+// nested subdirectories.
+func bucketIsEmpty(bucketPath string) (bool, error) {
+	empty := true
+	err := filepath.WalkDir(bucketPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if isSidecar(name) {
+			return nil
+		}
+		empty = false
+		return fs.SkipAll
+	})
+	return empty, err
 }
 
 // listObjectInfo is the per-object row returned by ListObjects. Field tags

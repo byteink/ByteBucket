@@ -4,16 +4,48 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"ByteBucket/internal/middleware"
 	"ByteBucket/internal/storage"
 
 	"github.com/gin-gonic/gin"
 	"github.com/goccy/go-json"
 )
+
+// auditACLChange writes a structured "acl_change" log line whenever a
+// caller mutates an ACL, on either the bucket or the object level. The
+// fields are stable so an operator can later answer "who made this bucket
+// public, when, with which credentials". One line per change is enough —
+// forensics work joins on request_id to recover the full request context.
+//
+// Only emit when the new value differs from the prior one, so a re-apply
+// of the same canned value does not flood the log.
+func auditACLChange(c *gin.Context, resourceKind, bucket, key, oldACL, newACL string) {
+	if oldACL == newACL {
+		return
+	}
+	actor := ""
+	if v, ok := c.Get("user"); ok {
+		if u, ok := v.(*storage.User); ok {
+			actor = u.AccessKeyID
+		}
+	}
+	slog.Info("acl_change",
+		"resource", resourceKind,
+		"bucket", bucket,
+		"key", key,
+		"from", oldACL,
+		"to", newACL,
+		"actor", actor,
+		"request_id", middleware.RequestID(c),
+		"remote_ip", c.ClientIP(),
+	)
+}
 
 // aclMaxBodyBytes caps the size of an inbound AccessControlPolicy document.
 // 8 KiB is well above any legitimate canned-grant document and keeps a hostile
@@ -162,10 +194,15 @@ func PutBucketACLHandler(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "InvalidArgument", "Invalid ACL: "+err.Error())
 		return
 	}
+	// Read the prior value before mutating so the audit line captures
+	// the transition (private->public-read in particular is the one
+	// that matters for incident response).
+	prior, _ := storage.EffectiveBucketACL(bucket)
 	if err := storage.PutBucketACL(bucket, &storage.BucketACL{Canned: canned}); err != nil {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Failed to persist bucket ACL")
 		return
 	}
+	auditACLChange(c, "bucket", bucket, "", prior, canned)
 	c.Status(http.StatusOK)
 }
 
@@ -202,10 +239,12 @@ func PutObjectACLHandler(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "InvalidArgument", "Invalid ACL: "+err.Error())
 		return
 	}
+	prior, _ := storage.EffectiveObjectACL(bucket, objectPath)
 	if err := storage.SetObjectACL(objectPath, canned); err != nil {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Failed to persist object ACL")
 		return
 	}
+	auditACLChange(c, "object", bucket, key, prior, canned)
 	c.Status(http.StatusOK)
 }
 

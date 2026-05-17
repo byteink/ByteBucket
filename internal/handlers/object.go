@@ -117,6 +117,13 @@ func UploadObjectHandler(c *gin.Context) {
 		return
 	}
 
+	// If the upload set an explicit canned ACL, audit it as if it were a
+	// PutObjectAcl call. The visible transition is "default -> <canned>";
+	// helpful when scoping which uploads opened up which objects.
+	if cannedACL != "" {
+		auditACLChange(c, "object", bucketName, objectKey, storage.ACLPrivate, cannedACL)
+	}
+
 	// Credit the new object's bytes against the bucket gauge. Best-effort
 	// delta — not recomputed at startup — so the value should be treated
 	// as a trendline, not an authoritative size report.
