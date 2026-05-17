@@ -1,11 +1,15 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/xml"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -204,64 +208,198 @@ func DeleteBucketHandler(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// ListObjectsHandler lists objects in a bucket.
+// listObjectInfo is the per-object row returned by ListObjects. Field tags
+// are dual-encoded so the same struct serialises into the S3 XML wire shape
+// on the SigV4 surface and the admin JSON shape on /api/s3.
+type listObjectInfo struct {
+	Key          string `xml:"Key" json:"key"`
+	LastModified string `xml:"LastModified" json:"lastModified"`
+	ETag         string `xml:"ETag" json:"etag"`
+	Size         int64  `xml:"Size" json:"size"`
+	StorageClass string `xml:"StorageClass" json:"storageClass"`
+	// ACL is the effective canned ACL after applying bucket inheritance.
+	// ACLSource is "object" when the object set its own value, "bucket"
+	// when inherited, or "default" when neither was set. Surfaced only
+	// on the admin JSON view; SigV4 XML omits it.
+	ACL       string `xml:"-" json:"acl,omitempty"`
+	ACLSource string `xml:"-" json:"aclSource,omitempty"`
+}
+
+// listCommonPrefix mirrors S3's <CommonPrefixes><Prefix>...</Prefix>...
+// element. A bucket "folder" appears here when the delimiter query rolls up
+// every key sharing that prefix into a single entry.
+type listCommonPrefix struct {
+	Prefix string `xml:"Prefix" json:"prefix"`
+}
+
+// listMaxKeys bounds how many objects+commonPrefixes a single response may
+// carry. Matches the S3 default and ceiling so clients written against AWS
+// do not need a behavioural override.
+const listMaxKeys = 1000
+
+// isSidecar reports whether a file name is one of our internal sidecars
+// (.meta, .cors.json, .acl.json). Used at every recursion depth so a key
+// like "data/.meta" is excluded just as reliably as "/data/foo.txt.meta".
+func isSidecar(name string) bool {
+	return strings.HasSuffix(name, ".meta") || name == ".cors.json" || name == ".acl.json"
+}
+
+// ListObjectsHandler implements S3 ListObjects / ListObjectsV2 semantics:
+// recursive walk of the bucket directory, prefix scoping, delimiter rollup
+// into CommonPrefixes, and continuation-token paging. The same handler is
+// mounted on both the SigV4 (XML) surface and the admin (JSON) surface;
+// only the response encoder differs.
 func ListObjectsHandler(c *gin.Context) {
 	bucketName := c.Param("bucket")
 	bucketPath := filepath.Join(objectsRoot, bucketName)
-	entries, err := os.ReadDir(bucketPath)
-	if err != nil {
+	if info, err := os.Stat(bucketPath); err != nil || !info.IsDir() {
+		respondError(c, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
+		return
+	}
+
+	q := c.Request.URL.Query()
+	prefix := q.Get("prefix")
+	delimiter := q.Get("delimiter")
+	maxKeys := parseMaxKeys(q.Get("max-keys"))
+	startAfter := decodeContinuation(q.Get("continuation-token"))
+	if startAfter == "" {
+		// Plain ListObjects v1 uses "marker"; v2 uses "continuation-token".
+		// Accept the v1 alias so SDKs that pin to v1 (and our own tests) work.
+		startAfter = q.Get("marker")
+	}
+
+	// Walk the bucket recursively. WalkDir visits in lexical order per
+	// directory but interleaves nested entries with siblings, so we cannot
+	// rely on traversal order for the final response — collect first, sort
+	// after filtering. The cost is one pass plus a sort; acceptable at the
+	// listMaxKeys=1000 ceiling we paginate to.
+	type rawEntry struct {
+		key  string
+		path string
+		mod  time.Time
+		size int64
+	}
+	var all []rawEntry
+	walkErr := filepath.WalkDir(bucketPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if isSidecar(d.Name()) {
+			return nil
+		}
+		rel, err := filepath.Rel(bucketPath, path)
+		if err != nil {
+			return err
+		}
+		key := filepath.ToSlash(rel)
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		all = append(all, rawEntry{key: key, path: path, mod: info.ModTime(), size: info.Size()})
+		return nil
+	})
+	if walkErr != nil {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Error reading bucket")
 		return
 	}
 
-	type ObjectInfo struct {
-		Key          string `xml:"Key" json:"key"`
-		LastModified string `xml:"LastModified" json:"lastModified"`
-		ETag         string `xml:"ETag" json:"etag"`
-		Size         int64  `xml:"Size" json:"size"`
-		StorageClass string `xml:"StorageClass" json:"storageClass"`
-		// ACL is the effective canned ACL after applying bucket inheritance.
-		// ACLSource is "object" when the object set its own value, "bucket"
-		// when inherited, or "default" when neither was set. Surfaced only
-		// on the admin JSON view; SigV4 XML omits it.
-		ACL       string `xml:"-" json:"acl,omitempty"`
-		ACLSource string `xml:"-" json:"aclSource,omitempty"`
+	// Apply prefix filter, delimiter rollup, and continuation token before
+	// resolving ETag/ACL so we do not pay sidecar IO for entries we will not
+	// emit. A delimiter set to "/" collapses every nested object under a
+	// shared prefix into one CommonPrefix entry, exactly matching S3.
+	objects := make([]rawEntry, 0, len(all))
+	prefixSet := make(map[string]struct{})
+	for _, e := range all {
+		if prefix != "" && !strings.HasPrefix(e.key, prefix) {
+			continue
+		}
+		if delimiter != "" {
+			rest := e.key[len(prefix):]
+			if idx := strings.Index(rest, delimiter); idx >= 0 {
+				cp := prefix + rest[:idx+len(delimiter)]
+				prefixSet[cp] = struct{}{}
+				continue
+			}
+		}
+		objects = append(objects, e)
 	}
-	var objects []ObjectInfo
-	for _, entry := range entries {
-		if entry.IsDir() {
+
+	// Sort both arms lexicographically so pagination by "last key emitted"
+	// is well-defined across both objects and common prefixes.
+	sort.Slice(objects, func(i, j int) bool { return objects[i].key < objects[j].key })
+	commonPrefixes := make([]string, 0, len(prefixSet))
+	for p := range prefixSet {
+		commonPrefixes = append(commonPrefixes, p)
+	}
+	sort.Strings(commonPrefixes)
+
+	// Pagination cursor: drop anything <= startAfter from BOTH arms. We
+	// merge objects + commonPrefixes into a single sorted stream so a
+	// single token resumes the listing deterministically.
+	type emitItem struct {
+		isPrefix bool
+		key      string // object key or common prefix string
+		entry    rawEntry
+	}
+	merged := make([]emitItem, 0, len(objects)+len(commonPrefixes))
+	for _, e := range objects {
+		merged = append(merged, emitItem{key: e.key, entry: e})
+	}
+	for _, p := range commonPrefixes {
+		merged = append(merged, emitItem{isPrefix: true, key: p})
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].key < merged[j].key })
+	if startAfter != "" {
+		// Linear seek is fine — len(merged) <= a few thousand in practice
+		// and a binary search would obscure the invariant that pagination
+		// drops everything LEX-≤ token.
+		cut := 0
+		for cut < len(merged) && merged[cut].key <= startAfter {
+			cut++
+		}
+		merged = merged[cut:]
+	}
+
+	truncated := false
+	var nextToken string
+	if len(merged) > maxKeys {
+		truncated = true
+		last := merged[maxKeys-1].key
+		nextToken = encodeContinuation(last)
+		merged = merged[:maxKeys]
+	}
+
+	// Resolve ETag + ACL for the surviving objects only. ACL inheritance
+	// reads the bucket sidecar once per object; for buckets without a
+	// per-bucket ACL the call short-circuits to the in-memory default.
+	emittedObjects := make([]listObjectInfo, 0, maxKeys)
+	emittedPrefixes := make([]listCommonPrefix, 0)
+	for _, it := range merged {
+		if it.isPrefix {
+			emittedPrefixes = append(emittedPrefixes, listCommonPrefix{Prefix: it.key})
 			continue
 		}
-		// Skip sidecar metadata files and the per-bucket CORS/ACL
-		// subresources; none are user-visible objects.
-		name := entry.Name()
-		if strings.HasSuffix(name, ".meta") || name == ".cors.json" || name == ".acl.json" {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		// Resolve the per-object ETag from its sidecar. A backfill kicks in
-		// for legacy objects that predate ETag persistence so the listing is
-		// self-healing rather than returning an empty or stale value.
-		etag, err := loadOrBackfillETag(filepath.Join(bucketPath, name))
+		etag, err := loadOrBackfillETag(it.entry.path)
 		if err != nil {
 			respondError(c, http.StatusInternalServerError, "InternalError",
-				fmt.Sprintf("Error resolving ETag for %s: %v", name, err))
+				fmt.Sprintf("Error resolving ETag for %s: %v", it.key, err))
 			return
 		}
-		acl, aclSrc, err := storage.ResolveObjectACL(bucketName, filepath.Join(bucketPath, name))
+		acl, aclSrc, err := storage.ResolveObjectACL(bucketName, it.entry.path)
 		if err != nil {
 			respondError(c, http.StatusInternalServerError, "InternalError",
-				fmt.Sprintf("Error resolving ACL for %s: %v", name, err))
+				fmt.Sprintf("Error resolving ACL for %s: %v", it.key, err))
 			return
 		}
-		objects = append(objects, ObjectInfo{
-			Key:          name,
-			LastModified: info.ModTime().Format(time.RFC3339),
+		emittedObjects = append(emittedObjects, listObjectInfo{
+			Key:          it.key,
+			LastModified: it.entry.mod.Format(time.RFC3339),
 			ETag:         etag,
-			Size:         info.Size(),
+			Size:         it.entry.size,
 			StorageClass: "STANDARD",
 			ACL:          acl,
 			ACLSource:    aclSrc,
@@ -269,31 +407,84 @@ func ListObjectsHandler(c *gin.Context) {
 	}
 
 	if wantsJSON(c) {
-		c.JSON(http.StatusOK, gin.H{
-			"name":     bucketName,
-			"contents": objects,
-		})
+		body := gin.H{
+			"name":           bucketName,
+			"prefix":         prefix,
+			"delimiter":      delimiter,
+			"maxKeys":        maxKeys,
+			"isTruncated":    truncated,
+			"contents":       emittedObjects,
+			"commonPrefixes": emittedPrefixes,
+		}
+		if nextToken != "" {
+			body["nextContinuationToken"] = nextToken
+		}
+		c.JSON(http.StatusOK, body)
 		return
 	}
 	result := struct {
-		XMLName     xml.Name     `xml:"ListBucketResult"`
-		XMLNS       string       `xml:"xmlns,attr"`
-		Name        string       `xml:"Name"`
-		Prefix      string       `xml:"Prefix"`
-		Marker      string       `xml:"Marker"`
-		MaxKeys     int          `xml:"MaxKeys"`
-		IsTruncated bool         `xml:"IsTruncated"`
-		Contents    []ObjectInfo `xml:"Contents"`
+		XMLName               xml.Name           `xml:"ListBucketResult"`
+		XMLNS                 string             `xml:"xmlns,attr"`
+		Name                  string             `xml:"Name"`
+		Prefix                string             `xml:"Prefix"`
+		Delimiter             string             `xml:"Delimiter,omitempty"`
+		Marker                string             `xml:"Marker"`
+		MaxKeys               int                `xml:"MaxKeys"`
+		IsTruncated           bool               `xml:"IsTruncated"`
+		NextContinuationToken string             `xml:"NextContinuationToken,omitempty"`
+		Contents              []listObjectInfo   `xml:"Contents"`
+		CommonPrefixes        []listCommonPrefix `xml:"CommonPrefixes"`
 	}{
-		XMLNS:       "https://s3.amazonaws.com/doc/2006-03-01/",
-		Name:        bucketName,
-		Prefix:      "",
-		Marker:      "",
-		MaxKeys:     1000,
-		IsTruncated: false,
-		Contents:    objects,
+		XMLNS:                 "https://s3.amazonaws.com/doc/2006-03-01/",
+		Name:                  bucketName,
+		Prefix:                prefix,
+		Delimiter:             delimiter,
+		Marker:                startAfter,
+		MaxKeys:               maxKeys,
+		IsTruncated:           truncated,
+		NextContinuationToken: nextToken,
+		Contents:              emittedObjects,
+		CommonPrefixes:        emittedPrefixes,
 	}
 	c.XML(http.StatusOK, result)
+}
+
+// parseMaxKeys clamps the user-supplied max-keys to the legal [1, listMaxKeys]
+// range. Malformed input falls back to the ceiling instead of erroring; AWS
+// SDKs occasionally pass empty strings on default and we want them to work.
+func parseMaxKeys(raw string) int {
+	if raw == "" {
+		return listMaxKeys
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return listMaxKeys
+	}
+	if n > listMaxKeys {
+		return listMaxKeys
+	}
+	return n
+}
+
+// encodeContinuation/decodeContinuation wrap pagination tokens in URL-safe
+// base64 so they survive query-string round-trips and so the on-the-wire
+// token does not leak the raw key path. The token is opaque to clients.
+func encodeContinuation(key string) string {
+	return base64.URLEncoding.EncodeToString([]byte(key))
+}
+
+func decodeContinuation(token string) string {
+	if token == "" {
+		return ""
+	}
+	b, err := base64.URLEncoding.DecodeString(token)
+	if err != nil {
+		// A malformed token can either error or be ignored; ignoring is
+		// kinder to clients that recycled an outdated token and matches
+		// what AWS does in practice.
+		return ""
+	}
+	return string(b)
 }
 
 // HeadBucketHandler checks if a bucket exists and returns 200/404 with no body
