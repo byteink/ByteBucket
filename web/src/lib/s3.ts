@@ -139,13 +139,36 @@ export async function deleteBucket(s: Session, name: string): Promise<void> {
   if (!res.ok) await throwHTTP(res);
 }
 
-export async function listObjects(s: Session, bucket: string): Promise<S3Object[]> {
-  const res = await fetch(`/api/s3/${encodeURIComponent(bucket)}`, {
-    headers: authHeaders(s),
-  });
+export interface ListObjectsResult {
+  contents: S3Object[];
+  commonPrefixes: string[];
+}
+
+// listObjects supports S3-style hierarchical browsing: pass a prefix (e.g.
+// "foo/") plus delimiter "/" and the server rolls every nested key under that
+// prefix into CommonPrefixes, mirroring the AWS console folder view.
+export async function listObjects(
+  s: Session,
+  bucket: string,
+  prefix = '',
+  delimiter = '',
+): Promise<ListObjectsResult> {
+  const params = new URLSearchParams();
+  if (prefix) params.set('prefix', prefix);
+  if (delimiter) params.set('delimiter', delimiter);
+  const qs = params.toString();
+  const suffix = qs ? '?' + qs : '';
+  const url = `/api/s3/${encodeURIComponent(bucket)}${suffix}`;
+  const res = await fetch(url, { headers: authHeaders(s) });
   if (!res.ok) await throwHTTP(res);
-  const body = (await res.json()) as { contents?: S3Object[] | null };
-  return body.contents ?? [];
+  const body = (await res.json()) as {
+    contents?: S3Object[] | null;
+    commonPrefixes?: { prefix: string }[] | null;
+  };
+  return {
+    contents: body.contents ?? [],
+    commonPrefixes: (body.commonPrefixes ?? []).map((p) => p.prefix),
+  };
 }
 
 export async function putObject(

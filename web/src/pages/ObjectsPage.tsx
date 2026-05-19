@@ -1,5 +1,5 @@
 import { ChangeEvent, DragEvent, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   deleteObject,
   getBucketACL,
@@ -22,8 +22,12 @@ interface ObjectRow {
 export default function ObjectsPage() {
   const { name } = useParams<{ name: string }>();
   const bucket = name ?? '';
+  const [params, setParams] = useSearchParams();
+  // Current folder, always either "" (bucket root) or ends with "/".
+  const prefix = params.get('prefix') ?? '';
   const session = loadSession();
   const [rows, setRows] = useState<ObjectRow[] | null>(null);
+  const [folders, setFolders] = useState<string[]>([]);
   const [bucketACL, setBucketACL] = useState<CannedACL>('private');
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -33,12 +37,13 @@ export default function ObjectsPage() {
     setError(null);
     try {
       const [list, bAcl] = await Promise.all([
-        listObjects(session, bucket),
+        listObjects(session, bucket, prefix, '/'),
         getBucketACL(session, bucket),
       ]);
       setBucketACL(bAcl);
+      setFolders(list.commonPrefixes);
       setRows(
-        list.map((o) => ({
+        list.contents.map((o) => ({
           key: o.key,
           size: o.size,
           modified: o.lastModified ? new Date(o.lastModified).toISOString() : undefined,
@@ -54,13 +59,20 @@ export default function ObjectsPage() {
   useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bucket]);
+  }, [bucket, prefix]);
+
+  function navigate(nextPrefix: string) {
+    const next = new URLSearchParams(params);
+    if (nextPrefix) next.set('prefix', nextPrefix);
+    else next.delete('prefix');
+    setParams(next);
+  }
 
   async function uploadFiles(files: FileList | File[]) {
     if (!session || !bucket) return;
     try {
       for (const file of Array.from(files)) {
-        await putObject(session, bucket, file.name, file);
+        await putObject(session, bucket, prefix + file.name, file);
       }
       await refresh();
     } catch (e) {
@@ -72,9 +84,6 @@ export default function ObjectsPage() {
     if (!session || !bucket) return;
     try {
       const blob = await getObject(session, bucket, key);
-      // Trigger a download via an ephemeral object URL. Revoke immediately
-      // after click so the blob can be GC'd; browsers keep the download alive
-      // through the Blob reference held by the download dialog.
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -131,12 +140,32 @@ export default function ObjectsPage() {
     }
   }
 
+  const crumbs = buildCrumbs(prefix);
+
   return (
     <section>
       <nav className="text-xs text-ink-500 mb-2">
         <Link to="/buckets" className="hover:underline">Buckets</Link>
         <span className="mx-1">/</span>
-        <span className="font-mono text-ink-900">{bucket}</span>
+        <button
+          type="button"
+          className="font-mono text-ink-900 hover:underline"
+          onClick={() => navigate('')}
+        >
+          {bucket}
+        </button>
+        {crumbs.map((c) => (
+          <span key={c.prefix}>
+            <span className="mx-1">/</span>
+            <button
+              type="button"
+              className="font-mono text-ink-900 hover:underline"
+              onClick={() => navigate(c.prefix)}
+            >
+              {c.label}
+            </button>
+          </span>
+        ))}
       </nav>
       <div className="flex items-baseline justify-between mb-6">
         <h2 className="text-base">
@@ -166,20 +195,20 @@ export default function ObjectsPage() {
         onDrop={onDrop}
         className={`border border-dashed ${dragOver ? 'border-ink-900' : 'border-ink-200'} p-6 mb-6 text-center text-xs text-ink-500`}
       >
-        Drop files here to upload
+        Drop files here to upload{prefix ? ` into ${prefix}` : ''}
       </div>
 
       {error && <div className="text-xs text-ink-900 border-l-2 border-ink-900 pl-3 mb-4">{error}</div>}
 
       {rows === null ? (
         <p className="text-ink-500 text-sm">Loading.</p>
-      ) : rows.length === 0 ? (
-        <p className="text-ink-500 text-sm">Empty bucket.</p>
+      ) : rows.length === 0 && folders.length === 0 ? (
+        <p className="text-ink-500 text-sm">{prefix ? 'Empty folder.' : 'Empty bucket.'}</p>
       ) : (
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left border-b border-ink-200 text-ink-500">
-              <th className="table-cell font-normal">Key</th>
+              <th className="table-cell font-normal">Name</th>
               <th className="table-cell font-normal w-24">Size</th>
               <th className="table-cell font-normal w-56">Modified</th>
               <th className="table-cell font-normal w-44">Visibility</th>
@@ -187,6 +216,23 @@ export default function ObjectsPage() {
             </tr>
           </thead>
           <tbody>
+            {folders.map((p) => (
+              <tr key={p} className="border-b border-ink-100">
+                <td className="table-cell font-mono text-xs break-all">
+                  <button
+                    type="button"
+                    className="hover:underline text-left"
+                    onClick={() => navigate(p)}
+                  >
+                    {p.slice(prefix.length)}
+                  </button>
+                </td>
+                <td className="table-cell text-xs text-ink-500">-</td>
+                <td className="table-cell text-xs text-ink-500">-</td>
+                <td className="table-cell text-xs text-ink-500">-</td>
+                <td className="table-cell"></td>
+              </tr>
+            ))}
             {rows.map((o) => (
               <tr key={o.key} className="border-b border-ink-100">
                 <td className="table-cell font-mono text-xs break-all">
@@ -197,7 +243,7 @@ export default function ObjectsPage() {
                       .map((p) => encodeURIComponent(p))
                       .join('/')}`}
                   >
-                    {o.key}
+                    {o.key.slice(prefix.length)}
                   </Link>
                 </td>
                 <td className="table-cell text-xs text-ink-500">{formatSize(o.size)}</td>
@@ -226,9 +272,20 @@ export default function ObjectsPage() {
   );
 }
 
-// renderVisibility surfaces both the effective ACL and its source so admins
-// can tell at a glance whether a "public" row is publicly readable because
-// the bucket is open or because the object itself was explicitly published.
+// buildCrumbs turns "a/b/c/" into [{label:"a", prefix:"a/"}, {label:"b", prefix:"a/b/"}, ...]
+// so each segment is independently clickable.
+function buildCrumbs(prefix: string): { label: string; prefix: string }[] {
+  if (!prefix) return [];
+  const parts = prefix.split('/').filter((p) => p.length > 0);
+  const out: { label: string; prefix: string }[] = [];
+  let acc = '';
+  for (const p of parts) {
+    acc += p + '/';
+    out.push({ label: p, prefix: acc });
+  }
+  return out;
+}
+
 function renderVisibility(acl: CannedACL, source: 'object' | 'bucket' | 'default') {
   if (acl === 'public-read') {
     return (
