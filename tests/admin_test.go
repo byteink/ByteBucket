@@ -42,7 +42,7 @@ func createRestrictedUser(withListPermission bool) (string, string) {
 	var aclRules []map[string]interface{}
 	aclRules = append(aclRules, map[string]interface{}{
 		"effect":  "Allow",
-		"buckets": []string{"bucketA"},
+		"buckets": []string{"bucket-a"},
 		"actions": []string{"*"},
 	})
 	if withListPermission {
@@ -223,12 +223,12 @@ func testListBuckets(t *testing.T, client *s3.Client, expectSuccess bool) {
 func TestAdminAndUserAccess(t *testing.T) {
 	// Step 1: Admin test using admin credentials.
 	adminClient := createS3Client(adminCreds.AccessKeyID, adminCreds.SecretAccessKey)
-	testS3Operations(t, adminClient, "bucketA", "test.txt", "Admin test content", true)
+	testS3Operations(t, adminClient, "bucket-a", "test.txt", "Admin test content", true)
 
 	// Step 2: Restricted user WITH ListBuckets permission.
 	userAccessKey, userSecretKey := createRestrictedUser(true)
 	userClientWithList := createS3Client(userAccessKey, userSecretKey)
-	testS3Operations(t, userClientWithList, "bucketA", "test.txt", "User allowed content", true)
+	testS3Operations(t, userClientWithList, "bucket-a", "test.txt", "User allowed content", true)
 	testListBuckets(t, userClientWithList, true)
 	deleteUser(t, userAccessKey)
 
@@ -257,7 +257,7 @@ func TestRestrictedUserBucketCreation(t *testing.T) {
 	client := createS3Client(accessKey, secretKey)
 
 	// Attempt to create a bucket not in the allowed ACL (bucketB).
-	_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{Bucket: aws.String("bucketB")})
+	_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{Bucket: aws.String("bucket-b")})
 	if err == nil {
 		t.Fatal("Expected failure when creating unauthorized bucket, but succeeded")
 	}
