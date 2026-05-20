@@ -3,11 +3,13 @@ package handlers
 import (
 	"encoding/json"
 	"encoding/xml"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -343,6 +345,95 @@ func TestListObjects_V1MarkerAndNextMarker(t *testing.T) {
 	}
 	if page2.IsTruncated {
 		t.Fatalf("page2 should not be truncated")
+	}
+}
+
+// listAllPages walks the JSON surface page by page exactly as the UI does:
+// follow nextContinuationToken until the listing reports it is no longer
+// truncated, accumulating keys and prefixes. Returns the union and asserts no
+// page is ever truncated without issuing a token (which would strand items).
+func listAllPages(t *testing.T, bucket, baseQuery string, maxKeys int) (keys, prefixes []string) {
+	t.Helper()
+	token := ""
+	seenK := map[string]bool{}
+	seenP := map[string]bool{}
+	for page := 0; page < 10000; page++ {
+		q := baseQuery + "&max-keys=" + strconv.Itoa(maxKeys)
+		if token != "" {
+			q += "&continuation-token=" + token
+		}
+		body := listJSON(t, bucket, strings.TrimPrefix(q, "&"))
+		for _, k := range extractKeys(t, body) {
+			if seenK[k] {
+				t.Fatalf("duplicate object across pages: %q", k)
+			}
+			seenK[k] = true
+			keys = append(keys, k)
+		}
+		for _, p := range extractPrefixes(t, body) {
+			if seenP[p] {
+				t.Fatalf("duplicate prefix across pages: %q", p)
+			}
+			seenP[p] = true
+			prefixes = append(prefixes, p)
+		}
+		trunc, _ := body["isTruncated"].(bool)
+		token, _ = body["nextContinuationToken"].(string)
+		if !trunc {
+			if token != "" {
+				t.Fatalf("not truncated but token present: %q", token)
+			}
+			return keys, prefixes
+		}
+		if token == "" {
+			t.Fatalf("page %d truncated but no continuation token (items stranded)", page)
+		}
+	}
+	t.Fatal("pagination did not terminate")
+	return nil, nil
+}
+
+// Paginating a large, mixed (files + folders) listing across many small pages
+// must enumerate every top-level entry exactly once, for any page size.
+func TestListObjects_PaginationLosesNothing(t *testing.T) {
+	var seed []string
+	wantFiles := map[string]bool{}
+	wantFolders := map[string]bool{}
+	// 50 top-level files and 40 folders of 30 objects each: 1250 items total,
+	// well past the 1000 ceiling, with files and folder-prefixes interleaving
+	// lexically so page boundaries fall inside both arms.
+	for i := 0; i < 50; i++ {
+		k := fmt.Sprintf("file-%03d.txt", i)
+		seed = append(seed, k)
+		wantFiles[k] = true
+	}
+	for f := 0; f < 40; f++ {
+		folder := fmt.Sprintf("dir-%03d/", f)
+		wantFolders[folder] = true
+		for o := 0; o < 30; o++ {
+			seed = append(seed, fmt.Sprintf("%sobj-%03d.bin", folder, o))
+		}
+	}
+	seedListBucket(t, "big", seed)
+
+	for _, mk := range []int{1, 2, 7, 100, 1000} {
+		keys, prefixes := listAllPages(t, "big", "delimiter=%2F", mk)
+		if len(keys) != len(wantFiles) {
+			t.Fatalf("maxKeys=%d: got %d top-level files, want %d", mk, len(keys), len(wantFiles))
+		}
+		for _, k := range keys {
+			if !wantFiles[k] {
+				t.Fatalf("maxKeys=%d: unexpected file %q", mk, k)
+			}
+		}
+		if len(prefixes) != len(wantFolders) {
+			t.Fatalf("maxKeys=%d: got %d folders, want %d", mk, len(prefixes), len(wantFolders))
+		}
+		for _, p := range prefixes {
+			if !wantFolders[p] {
+				t.Fatalf("maxKeys=%d: unexpected folder %q", mk, p)
+			}
+		}
 	}
 }
 

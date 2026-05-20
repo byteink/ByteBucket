@@ -1,24 +1,8 @@
-import { ChangeEvent, DragEvent, useEffect, useState } from 'react';
+import { ChangeEvent, DragEvent, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import {
-  deleteObject,
-  getBucketACL,
-  getObject,
-  listObjects,
-  putObject,
-  putObjectACL,
-  type CannedACL,
-  type S3Object,
-} from '../lib/s3';
+import { deleteObject, getObject, putObject, putObjectACL, type CannedACL } from '../lib/s3';
 import { loadSession } from '../lib/session';
-
-interface ObjectRow {
-  key: string;
-  size: number;
-  modified?: string;
-  acl: CannedACL;
-  aclSource: 'object' | 'bucket' | 'default';
-}
+import { useObjectListing, type ObjectRow } from '../lib/useObjectListing';
 
 export default function ObjectsPage() {
   const { name } = useParams<{ name: string }>();
@@ -27,59 +11,9 @@ export default function ObjectsPage() {
   // Current folder, always either "" (bucket root) or ends with "/".
   const prefix = params.get('prefix') ?? '';
   const session = loadSession();
-  const [rows, setRows] = useState<ObjectRow[] | null>(null);
-  const [folders, setFolders] = useState<string[]>([]);
-  const [bucketACL, setBucketACL] = useState<CannedACL>('private');
-  const [error, setError] = useState<string | null>(null);
+  const { rows, folders, bucketACL, error, loadingMore, hasMore, refresh, loadMore, setError } =
+    useObjectListing(session, bucket, prefix);
   const [dragOver, setDragOver] = useState(false);
-  // Forward-only pagination cursor for the current prefix. Undefined once the
-  // listing is exhausted; presence is what gates the "Load more" control.
-  const [nextToken, setNextToken] = useState<string | undefined>(undefined);
-  const [loadingMore, setLoadingMore] = useState(false);
-
-  async function refresh() {
-    if (!session || !bucket) return;
-    setError(null);
-    try {
-      const [list, bAcl] = await Promise.all([
-        listObjects(session, bucket, prefix, '/'),
-        getBucketACL(session, bucket),
-      ]);
-      setBucketACL(bAcl);
-      setFolders(list.commonPrefixes);
-      setRows(list.contents.map((o) => toRow(o)));
-      setNextToken(list.isTruncated ? list.nextContinuationToken : undefined);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  // loadMore appends the next page. The server merges objects and folder
-  // rollups into one paginated stream, so a page can carry either; folders
-  // are de-duplicated since a prefix already shown must not repeat.
-  async function loadMore() {
-    if (!session || !bucket || !nextToken) return;
-    setLoadingMore(true);
-    setError(null);
-    try {
-      const list = await listObjects(session, bucket, prefix, '/', nextToken);
-      setFolders((prev) => {
-        const seen = new Set(prev);
-        return [...prev, ...list.commonPrefixes.filter((p) => !seen.has(p))];
-      });
-      setRows((prev) => [...(prev ?? []), ...list.contents.map((o) => toRow(o))]);
-      setNextToken(list.isTruncated ? list.nextContinuationToken : undefined);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoadingMore(false);
-    }
-  }
-
-  useEffect(() => {
-    void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bucket, prefix]);
 
   function navigate(nextPrefix: string) {
     const next = new URLSearchParams(params);
@@ -288,34 +222,27 @@ export default function ObjectsPage() {
             ))}
           </tbody>
         </table>
-        {nextToken && (
-          <div className="mt-4">
+        <div className="mt-4 flex items-center gap-4 border-t border-ink-100 pt-3 text-xs text-ink-500">
+          <span>
+            Showing {folders.length} folder{folders.length === 1 ? '' : 's'} and {rows.length} object
+            {rows.length === 1 ? '' : 's'}
+            {hasMore && <span className="text-ink-900"> — more not loaded yet</span>}
+          </span>
+          {hasMore && (
             <button
               type="button"
-              className="btn h-8 px-3 text-xs"
+              className="btn-primary h-8 px-4 text-xs"
               onClick={() => void loadMore()}
               disabled={loadingMore}
             >
               {loadingMore ? 'Loading.' : 'Load more'}
             </button>
-          </div>
-        )}
+          )}
+        </div>
         </>
       )}
     </section>
   );
-}
-
-// toRow projects a wire S3Object onto the table's row shape, normalising the
-// optional ACL fields to their resolved defaults.
-function toRow(o: S3Object): ObjectRow {
-  return {
-    key: o.key,
-    size: o.size,
-    modified: o.lastModified ? new Date(o.lastModified).toISOString() : undefined,
-    acl: o.acl ?? 'private',
-    aclSource: o.aclSource ?? 'default',
-  };
 }
 
 // buildCrumbs turns "a/b/c/" into [{label:"a", prefix:"a/"}, {label:"b", prefix:"a/b/"}, ...]
