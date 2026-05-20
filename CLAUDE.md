@@ -7,14 +7,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 make ui                                    # install web deps + build React bundle into internal/webui/dist
 make build                                 # produce ./build/ByteBucket (after make ui)
-make test                                  # go test -count=1 ./...
+make test                                  # CGO_ENABLED=0 go test -count=1 ./...
 make vet                                   # go vet ./...
 make pentest                               # black-box DAST: docker-compose with bytebucket + attacker container
 make image-scan                            # build prod image + Trivy scan (vuln/misconfig/secret, HIGH+CRITICAL gate)
 
 go run ./cmd/ByteBucket                    # local server (needs ENCRYPTION_KEY, ACCESS_KEY_ID, SECRET_ACCESS_KEY env vars)
 go test -count=1 ./internal/handlers/      # unit tests for one package
-go test -count=1 -run TestE2E_Multipart ./tests/...   # single E2E test
+CGO_ENABLED=0 go test -count=1 -run TestE2E_Multipart ./tests/...   # single E2E test (CGO off: see below)
 
 cd web && npm run dev                      # Vite dev server (HMR) on :5173, proxies admin API to :9001
 
@@ -24,7 +24,7 @@ docker compose -f docker/compose.dev.yml up                     # dev container 
 
 The `internal/webui/dist/` directory is `//go:embed`-ed at compile time. The directory must exist for Go to build — `.keep` anchors it; `make ui` populates real assets. If you only have `.keep`, the binary builds but serves a placeholder UI.
 
-E2E tests (`tests/`) need Docker running locally. They build `docker/Dockerfile` via testcontainers and drive the resulting container over HTTP. First run is slow (Docker build); subsequent runs hit the layer cache.
+E2E tests (`tests/`) need Docker running locally. They build `docker/Dockerfile` via testcontainers and drive the resulting container over HTTP. First run is slow (Docker build); subsequent runs hit the layer cache. Run them with `CGO_ENABLED=0` (as `make test` does): testcontainers pulls in `go-m1cpu`, whose cgo init segfaults under Go 1.26+ on darwin/arm64. We never call it, so the non-cgo stub is correct — and it matches the cgo-off binary we ship.
 
 ## Architecture
 

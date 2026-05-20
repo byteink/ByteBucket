@@ -19,8 +19,12 @@ build: ui
 vet:
 	go vet ./...
 
+# CGO_ENABLED=0 matches the shipped binary (see build target + Dockerfile) and
+# sidesteps a cgo init crash in go-m1cpu — a transitive testcontainers dep we
+# never call — under Go 1.26+ on darwin/arm64. Its non-cgo stub is selected
+# instead, so the E2E suite tests the exact build mode we deploy.
 test:
-	go test -count=1 ./...
+	CGO_ENABLED=0 go test -count=1 ./...
 
 # pentest brings up bytebucket + an isolated attacker container, runs the
 # probe suite over the docker network, propagates the attacker's exit code,
