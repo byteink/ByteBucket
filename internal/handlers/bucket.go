@@ -308,10 +308,24 @@ func ListObjectsHandler(c *gin.Context) {
 	prefix := q.Get("prefix")
 	delimiter := q.Get("delimiter")
 	maxKeys := parseMaxKeys(q.Get("max-keys"))
-	startAfter := decodeContinuation(q.Get("continuation-token"))
-	if startAfter == "" {
-		// Plain ListObjects v1 uses "marker"; v2 uses "continuation-token".
-		// Accept the v1 alias so SDKs that pin to v1 (and our own tests) work.
+
+	// list-type=2 selects the strict ListObjectsV2 contract (KeyCount,
+	// ContinuationToken/StartAfter, no Marker). Anything else is v1, which
+	// pages by Marker. The two differ only in cursor source and response
+	// shape; the walk/filter/sort below is shared.
+	listTypeV2 := q.Get("list-type") == "2"
+	contToken := q.Get("continuation-token")
+	startAfterParam := q.Get("start-after")
+	var startAfter string
+	switch {
+	case contToken != "":
+		// Opaque, server-issued cursor. Decoding never builds a filesystem
+		// path — it is compared lexically only — so a forged token cannot
+		// traverse out of the bucket.
+		startAfter = decodeContinuation(contToken)
+	case listTypeV2:
+		startAfter = startAfterParam
+	default:
 		startAfter = q.Get("marker")
 	}
 
@@ -412,11 +426,10 @@ func ListObjectsHandler(c *gin.Context) {
 	}
 
 	truncated := false
-	var nextToken string
+	var lastKey string
 	if len(merged) > maxKeys {
 		truncated = true
-		last := merged[maxKeys-1].key
-		nextToken = encodeContinuation(last)
+		lastKey = merged[maxKeys-1].key
 		merged = merged[:maxKeys]
 	}
 
@@ -453,45 +466,127 @@ func ListObjectsHandler(c *gin.Context) {
 		})
 	}
 
-	if wantsJSON(c) {
-		body := gin.H{
-			"name":           bucketName,
-			"prefix":         prefix,
-			"delimiter":      delimiter,
-			"maxKeys":        maxKeys,
-			"isTruncated":    truncated,
-			"contents":       emittedObjects,
-			"commonPrefixes": emittedPrefixes,
-		}
-		if nextToken != "" {
-			body["nextContinuationToken"] = nextToken
-		}
-		c.JSON(http.StatusOK, body)
-		return
+	page := listPage{
+		bucket:         bucketName,
+		prefix:         prefix,
+		delimiter:      delimiter,
+		maxKeys:        maxKeys,
+		keyCount:       len(emittedObjects) + len(emittedPrefixes),
+		truncated:      truncated,
+		lastKey:        lastKey,
+		objects:        emittedObjects,
+		commonPrefixes: emittedPrefixes,
 	}
+	switch {
+	case wantsJSON(c):
+		respondListJSON(c, page)
+	case listTypeV2:
+		respondListV2(c, page, contToken, startAfterParam)
+	default:
+		respondListV1(c, page, startAfter)
+	}
+}
+
+// listPage is the version-agnostic result of a ListObjects walk. The v1/v2
+// encoders below differ only in how they expose the pagination cursor.
+type listPage struct {
+	bucket         string
+	prefix         string
+	delimiter      string
+	maxKeys        int
+	keyCount       int
+	truncated      bool
+	lastKey        string // last emitted key when truncated; "" otherwise
+	objects        []listObjectInfo
+	commonPrefixes []listCommonPrefix
+}
+
+// respondListJSON serves the admin (JSON) surface. The admin UI is our own
+// client and pages purely on the opaque continuation token, independent of
+// S3 list-type semantics.
+func respondListJSON(c *gin.Context, p listPage) {
+	body := gin.H{
+		"name":           p.bucket,
+		"prefix":         p.prefix,
+		"delimiter":      p.delimiter,
+		"maxKeys":        p.maxKeys,
+		"keyCount":       p.keyCount,
+		"isTruncated":    p.truncated,
+		"contents":       p.objects,
+		"commonPrefixes": p.commonPrefixes,
+	}
+	if p.truncated {
+		body["nextContinuationToken"] = encodeContinuation(p.lastKey)
+	}
+	c.JSON(http.StatusOK, body)
+}
+
+// respondListV2 emits the strict ListObjectsV2 shape: KeyCount, the echoed
+// request ContinuationToken/StartAfter, and an opaque NextContinuationToken.
+// It never emits Marker.
+func respondListV2(c *gin.Context, p listPage, contToken, startAfter string) {
 	result := struct {
 		XMLName               xml.Name           `xml:"ListBucketResult"`
 		XMLNS                 string             `xml:"xmlns,attr"`
 		Name                  string             `xml:"Name"`
 		Prefix                string             `xml:"Prefix"`
 		Delimiter             string             `xml:"Delimiter,omitempty"`
-		Marker                string             `xml:"Marker"`
 		MaxKeys               int                `xml:"MaxKeys"`
+		KeyCount              int                `xml:"KeyCount"`
 		IsTruncated           bool               `xml:"IsTruncated"`
+		ContinuationToken     string             `xml:"ContinuationToken,omitempty"`
 		NextContinuationToken string             `xml:"NextContinuationToken,omitempty"`
+		StartAfter            string             `xml:"StartAfter,omitempty"`
 		Contents              []listObjectInfo   `xml:"Contents"`
 		CommonPrefixes        []listCommonPrefix `xml:"CommonPrefixes"`
 	}{
-		XMLNS:                 "https://s3.amazonaws.com/doc/2006-03-01/",
-		Name:                  bucketName,
-		Prefix:                prefix,
-		Delimiter:             delimiter,
-		Marker:                startAfter,
-		MaxKeys:               maxKeys,
-		IsTruncated:           truncated,
-		NextContinuationToken: nextToken,
-		Contents:              emittedObjects,
-		CommonPrefixes:        emittedPrefixes,
+		XMLNS:             "https://s3.amazonaws.com/doc/2006-03-01/",
+		Name:              p.bucket,
+		Prefix:            p.prefix,
+		Delimiter:         p.delimiter,
+		MaxKeys:           p.maxKeys,
+		KeyCount:          p.keyCount,
+		IsTruncated:       p.truncated,
+		ContinuationToken: contToken,
+		StartAfter:        startAfter,
+		Contents:          p.objects,
+		CommonPrefixes:    p.commonPrefixes,
+	}
+	if p.truncated {
+		result.NextContinuationToken = encodeContinuation(p.lastKey)
+	}
+	c.XML(http.StatusOK, result)
+}
+
+// respondListV1 emits the legacy ListObjects shape, paging by Marker. Per S3,
+// NextMarker is only returned when a delimiter is set; without one the client
+// resumes from the last key it received.
+func respondListV1(c *gin.Context, p listPage, marker string) {
+	result := struct {
+		XMLName        xml.Name           `xml:"ListBucketResult"`
+		XMLNS          string             `xml:"xmlns,attr"`
+		Name           string             `xml:"Name"`
+		Prefix         string             `xml:"Prefix"`
+		Marker         string             `xml:"Marker"`
+		NextMarker     string             `xml:"NextMarker,omitempty"`
+		Delimiter      string             `xml:"Delimiter,omitempty"`
+		MaxKeys        int                `xml:"MaxKeys"`
+		IsTruncated    bool               `xml:"IsTruncated"`
+		Contents       []listObjectInfo   `xml:"Contents"`
+		CommonPrefixes []listCommonPrefix `xml:"CommonPrefixes"`
+	}{
+		XMLNS:          "https://s3.amazonaws.com/doc/2006-03-01/",
+		Name:           p.bucket,
+		Prefix:         p.prefix,
+		Marker:         marker,
+		Delimiter:      p.delimiter,
+		MaxKeys:        p.maxKeys,
+		IsTruncated:    p.truncated,
+		Contents:       p.objects,
+		CommonPrefixes: p.commonPrefixes,
+	}
+	if p.truncated && p.delimiter != "" {
+		result.NextMarker = p.lastKey
 	}
 	c.XML(http.StatusOK, result)
 }
@@ -558,4 +653,3 @@ func HeadBucketHandler(c *gin.Context) {
 	}
 	c.Status(http.StatusOK)
 }
-
