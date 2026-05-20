@@ -142,20 +142,28 @@ export async function deleteBucket(s: Session, name: string): Promise<void> {
 export interface ListObjectsResult {
   contents: S3Object[];
   commonPrefixes: string[];
+  isTruncated: boolean;
+  // Opaque, server-issued cursor for the next page. Absent when the listing
+  // is complete. Pass it back via the continuationToken arg to fetch more.
+  nextContinuationToken?: string;
 }
 
 // listObjects supports S3-style hierarchical browsing: pass a prefix (e.g.
 // "foo/") plus delimiter "/" and the server rolls every nested key under that
 // prefix into CommonPrefixes, mirroring the AWS console folder view.
+// continuationToken resumes a truncated listing; the server caps each page at
+// 1000 entries, so large buckets are paged rather than fetched whole.
 export async function listObjects(
   s: Session,
   bucket: string,
   prefix = '',
   delimiter = '',
+  continuationToken = '',
 ): Promise<ListObjectsResult> {
   const params = new URLSearchParams();
   if (prefix) params.set('prefix', prefix);
   if (delimiter) params.set('delimiter', delimiter);
+  if (continuationToken) params.set('continuation-token', continuationToken);
   const qs = params.toString();
   const suffix = qs ? '?' + qs : '';
   const url = `/api/s3/${encodeURIComponent(bucket)}${suffix}`;
@@ -164,10 +172,14 @@ export async function listObjects(
   const body = (await res.json()) as {
     contents?: S3Object[] | null;
     commonPrefixes?: { prefix: string }[] | null;
+    isTruncated?: boolean;
+    nextContinuationToken?: string;
   };
   return {
     contents: body.contents ?? [],
     commonPrefixes: (body.commonPrefixes ?? []).map((p) => p.prefix),
+    isTruncated: body.isTruncated ?? false,
+    nextContinuationToken: body.nextContinuationToken,
   };
 }
 

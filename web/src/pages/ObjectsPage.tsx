@@ -8,6 +8,7 @@ import {
   putObject,
   putObjectACL,
   type CannedACL,
+  type S3Object,
 } from '../lib/s3';
 import { loadSession } from '../lib/session';
 
@@ -31,6 +32,10 @@ export default function ObjectsPage() {
   const [bucketACL, setBucketACL] = useState<CannedACL>('private');
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  // Forward-only pagination cursor for the current prefix. Undefined once the
+  // listing is exhausted; presence is what gates the "Load more" control.
+  const [nextToken, setNextToken] = useState<string | undefined>(undefined);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   async function refresh() {
     if (!session || !bucket) return;
@@ -42,17 +47,32 @@ export default function ObjectsPage() {
       ]);
       setBucketACL(bAcl);
       setFolders(list.commonPrefixes);
-      setRows(
-        list.contents.map((o) => ({
-          key: o.key,
-          size: o.size,
-          modified: o.lastModified ? new Date(o.lastModified).toISOString() : undefined,
-          acl: o.acl ?? 'private',
-          aclSource: o.aclSource ?? 'default',
-        })),
-      );
+      setRows(list.contents.map((o) => toRow(o)));
+      setNextToken(list.isTruncated ? list.nextContinuationToken : undefined);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // loadMore appends the next page. The server merges objects and folder
+  // rollups into one paginated stream, so a page can carry either; folders
+  // are de-duplicated since a prefix already shown must not repeat.
+  async function loadMore() {
+    if (!session || !bucket || !nextToken) return;
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const list = await listObjects(session, bucket, prefix, '/', nextToken);
+      setFolders((prev) => {
+        const seen = new Set(prev);
+        return [...prev, ...list.commonPrefixes.filter((p) => !seen.has(p))];
+      });
+      setRows((prev) => [...(prev ?? []), ...list.contents.map((o) => toRow(o))]);
+      setNextToken(list.isTruncated ? list.nextContinuationToken : undefined);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingMore(false);
     }
   }
 
@@ -205,6 +225,7 @@ export default function ObjectsPage() {
       ) : rows.length === 0 && folders.length === 0 ? (
         <p className="text-ink-500 text-sm">{prefix ? 'Empty folder.' : 'Empty bucket.'}</p>
       ) : (
+        <>
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left border-b border-ink-200 text-ink-500">
@@ -267,9 +288,34 @@ export default function ObjectsPage() {
             ))}
           </tbody>
         </table>
+        {nextToken && (
+          <div className="mt-4">
+            <button
+              type="button"
+              className="btn h-8 px-3 text-xs"
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+            >
+              {loadingMore ? 'Loading.' : 'Load more'}
+            </button>
+          </div>
+        )}
+        </>
       )}
     </section>
   );
+}
+
+// toRow projects a wire S3Object onto the table's row shape, normalising the
+// optional ACL fields to their resolved defaults.
+function toRow(o: S3Object): ObjectRow {
+  return {
+    key: o.key,
+    size: o.size,
+    modified: o.lastModified ? new Date(o.lastModified).toISOString() : undefined,
+    acl: o.acl ?? 'private',
+    aclSource: o.aclSource ?? 'default',
+  };
 }
 
 // buildCrumbs turns "a/b/c/" into [{label:"a", prefix:"a/"}, {label:"b", prefix:"a/b/"}, ...]
