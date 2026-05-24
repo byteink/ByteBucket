@@ -4,7 +4,25 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex,nofollow" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>ByteBucket Admin</title>
+    <script>
+      // Apply the persisted (or system) theme before first paint to avoid a
+      // flash of the wrong colors. Keep this in sync with src/lib/theme.ts.
+      (function () {
+        try {
+          var t = localStorage.getItem('bytebucket.theme');
+          var dark =
+            t === 'dark' ||
+            ((t === null || t === 'system') &&
+              globalThis.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {
+          // Storage may be blocked (private mode); fall back to the light default.
+          console.warn('theme: preference unavailable, using light', e);
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

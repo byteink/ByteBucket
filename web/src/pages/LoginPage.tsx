@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { saveSession } from '../lib/session';
 import { checkAdminAuth } from '../lib/admin';
+import ThemeToggle from '../components/ThemeToggle';
 
 // LoginPage collects admin credentials. There is no separate storage endpoint
 // any more: the UI and the storage API are same-origin on the admin port.
@@ -32,7 +33,10 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-full flex items-center justify-center px-6 py-16">
+    <div className="relative min-h-full flex items-center justify-center px-6 py-16">
+      <div className="absolute top-3 right-3">
+        <ThemeToggle />
+      </div>
       <form onSubmit={onSubmit} className="w-full max-w-sm">
         <h1 className="text-lg mb-8 font-mono">ByteBucket Admin</h1>
         <div className="space-y-4">

@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { clearSession, loadSession } from '../lib/session';
+import ThemeToggle from './ThemeToggle';
 
 const navItems = [
   { to: '/buckets', label: 'Buckets' },
@@ -39,6 +40,7 @@ export default function Layout() {
             <span className="font-mono truncate max-w-[12rem]" title={session?.accessKey}>
               {session?.accessKey}
             </span>
+            <ThemeToggle />
             <button className="btn h-7 px-2 text-xs" onClick={onLogout}>
               Log out
             </button>

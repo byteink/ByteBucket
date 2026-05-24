@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="ByteBucket">
+  <style>
+    .tile { fill: #0a0a0c; }
+    .mark { fill: #ffffff; }
+    /* Flip with the OS so the mark stays legible on dark browser chrome,
+       mirroring the in-app light/dark theme. */
+    @media (prefers-color-scheme: dark) {
+      .tile { fill: #f2f2f4; }
+      .mark { fill: #0b0b0d; }
+    }
+  </style>
+  <rect class="tile" width="32" height="32" rx="7" />
+  <!-- Bucket: flat rim over a tapering body, standard object-storage iconography. -->
+  <rect class="mark" x="7.5" y="8" width="17" height="3.4" rx="1.7" />
+  <path class="mark" d="M9 12.4 L23 12.4 L20.3 23.4 Q19.8 25 18 25 L14 25 Q12.2 25 11.7 23.4 Z" />
+</svg>

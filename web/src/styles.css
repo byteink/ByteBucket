@@ -19,11 +19,30 @@
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
+/* Dark theme remaps the same semantic ramp (ink-0 = surface, ink-900 = text)
+ * so every ink-* utility flips without touching component markup. The
+ * html.dark selector outranks the @theme :root vars by specificity, so it
+ * wins regardless of stylesheet source order. */
+html.dark {
+  --color-ink-0: #0b0b0d;
+  --color-ink-50: #141417;
+  --color-ink-100: #1b1b1f;
+  --color-ink-200: #2b2b31;
+  --color-ink-300: #3f3f47;
+  --color-ink-500: #9b9ba4;
+  --color-ink-700: #cfcfd5;
+  --color-ink-900: #f2f2f4;
+  color-scheme: dark;
+}
+
 @layer base {
   html,
   body,
   #root {
     height: 100%;
+  }
+  html {
+    color-scheme: light;
   }
   body {
     @apply bg-ink-0 text-ink-900 antialiased font-sans;
