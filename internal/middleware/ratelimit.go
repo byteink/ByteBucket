@@ -193,23 +193,27 @@ func (rl *rateLimiter) close() {
 // clientIP resolves the real client address, honouring exactly trustedProxies
 // reverse-proxy hops in front of this server.
 //
-// X-Forwarded-For is appended to by each proxy in the chain, so the list reads
-// left-to-right as [original-client, proxy-1, proxy-2, ...]. The rightmost
-// entries are the ones OUR infrastructure added and therefore trusts; every
-// entry further left was set by an upstream we do not control and is
-// attacker-spoofable. With N trusted proxies the genuine client is the
-// (N+1)-th entry counted from the RIGHT.
+// Each proxy in a standard chain (nginx proxy_add_x_forwarded_for, traefik,
+// AWS ALB, ...) appends the address of the host it received the request FROM.
+// So the proxy directly connected to us records the previous hop in
+// X-Forwarded-For and appears itself only in the transport RemoteAddr — it is
+// NOT in XFF. That makes the nearest proxy the first of our trustedProxies
+// hops, with the remaining (trustedProxies-1) hops being the rightmost XFF
+// entries our infrastructure wrote. The genuine client is therefore the entry
+// immediately to their left: parts[len-trustedProxies].
 //
-// Blindly trusting the leftmost entry (the naive `XFF[0]`) is the classic
-// rate-limit-evasion bug: an attacker prepends `X-Forwarded-For: 1.2.3.4` and
-// rotates the spoofed value to dodge per-IP buckets. Counting from the right
-// past only the hops we actually operate closes that hole.
+// Counting from the right past exactly the hops we operate is what defeats the
+// classic evasion: an attacker can only PREPEND entries (everything left of
+// what our outermost trusted proxy appended), and prepending grows the list
+// without moving parts[len-trustedProxies]. Trusting the leftmost entry
+// instead (naive XFF[0]) would let a rotated spoof mint a fresh bucket per
+// request. This matches how Gin's ClientIP, Express' proxy-addr, and RFC 7239
+// resolve the client behind a known number of trusted hops.
 //
-// If the header has fewer entries than N+1 (a request that did not traverse
-// the expected number of proxies, or none at all), we cannot trust any XFF
-// entry and fall back to the transport-level RemoteAddr, which no client can
-// forge. Parsed candidates are validated as IPs; a malformed entry falls back
-// the same way.
+// If the header has fewer than trustedProxies entries the request did not
+// traverse the expected chain; we trust no XFF entry and fall back to
+// RemoteAddr, which no client can forge. A selected entry that is not a valid
+// IP falls back the same way.
 func clientIP(r *http.Request, trustedProxies int) string {
 	remoteIP := remoteAddrIP(r)
 
@@ -226,15 +230,15 @@ func clientIP(r *http.Request, trustedProxies int) string {
 	}
 
 	parts := splitTrim(xff)
-	// Need at least one client entry plus the N proxy entries to trust the
-	// (N+1)-th from the right. Anything shorter means the chain was not as
-	// long as configured; do not guess — fall back to the socket peer.
-	if len(parts) < trustedProxies+1 {
+	// Fewer entries than hops means the chain was shorter than configured; do
+	// not guess — fall back to the socket peer. The nearest proxy is RemoteAddr
+	// (not in XFF), so a fully-traversed chain leaves at least trustedProxies
+	// entries here.
+	if len(parts) < trustedProxies {
 		return remoteIP
 	}
 
-	idx := len(parts) - 1 - trustedProxies
-	candidate := parts[idx]
+	candidate := parts[len(parts)-trustedProxies]
 	if ip := net.ParseIP(candidate); ip != nil {
 		return ip.String()
 	}

@@ -50,28 +50,40 @@ func TestClientIPProxyResolution(t *testing.T) {
 			want:       "203.0.113.5",
 		},
 		{
-			// One proxy appended the real client; the rightmost entry is our
-			// proxy, the one before it is the genuine client.
-			name:       "one proxy picks client left of proxy",
-			remoteAddr: "10.0.0.1:5000",
-			xff:        "198.51.100.7, 10.0.0.1",
+			// Single proxy: it appended the address it received from (the real
+			// client) and sits itself only in RemoteAddr. With one trusted hop
+			// the client is the rightmost XFF entry.
+			name:       "one proxy picks the client it appended",
+			remoteAddr: "10.0.0.1:5000", // the proxy
+			xff:        "198.51.100.7",  // proxy appended the genuine client
 			proxies:    1,
 			want:       "198.51.100.7",
 		},
 		{
-			// Attacker prepends a spoofed entry. With 1 trusted proxy we count
-			// one from the right past our proxy and land on the genuine client
-			// (the entry our proxy itself appended), NOT the leftmost spoof.
+			// Attacker prepends a spoofed entry; the proxy still appends the
+			// genuine client to its right. Counting one hop from the right lands
+			// on the client, never the leftmost spoof.
 			name:       "one proxy ignores prepended spoof",
 			remoteAddr: "10.0.0.1:5000",
-			xff:        "9.9.9.9, 198.51.100.7, 10.0.0.1",
+			xff:        "9.9.9.9, 198.51.100.7", // spoof, then real client
 			proxies:    1,
 			want:       "198.51.100.7",
 		},
 		{
-			name:       "three proxies picks fourth from right",
+			// Three hops: client -> p1 -> p2 -> p3 -> server. p3 (nearest) is in
+			// RemoteAddr; XFF holds [client, p1, p2]. The client is parts[len-3].
+			name:       "three proxies picks client past inner hops",
+			remoteAddr: "10.0.0.3:5000",                   // p3, nearest
+			xff:        "198.51.100.9, 10.0.0.1, 10.0.0.2", // client, p1, p2
+			proxies:    3,
+			want:       "198.51.100.9",
+		},
+		{
+			// Same three-hop chain with a prepended spoof: the extra left entry
+			// grows the list without shifting parts[len-3] off the client.
+			name:       "three proxies ignores prepended spoof",
 			remoteAddr: "10.0.0.3:5000",
-			xff:        "198.51.100.9, 10.0.0.1, 10.0.0.2, 10.0.0.3",
+			xff:        "1.1.1.1, 198.51.100.9, 10.0.0.1, 10.0.0.2",
 			proxies:    3,
 			want:       "198.51.100.9",
 		},
@@ -96,14 +108,14 @@ func TestClientIPProxyResolution(t *testing.T) {
 			// keying the limiter on attacker-chosen junk.
 			name:       "garbage selected entry falls back",
 			remoteAddr: "203.0.113.12:5000",
-			xff:        "not-an-ip, 10.0.0.1",
+			xff:        "not-an-ip",
 			proxies:    1,
 			want:       "203.0.113.12",
 		},
 		{
 			name:       "ipv6 client behind one proxy",
-			remoteAddr: "[fe80::1]:5000",
-			xff:        "2001:db8::1, fe80::1",
+			remoteAddr: "[fe80::1]:5000", // the proxy
+			xff:        "2001:db8::1",    // proxy appended the genuine client
 			proxies:    1,
 			want:       "2001:db8::1",
 		},
@@ -417,6 +429,34 @@ func TestRateLimitMiddlewareSpoofedXFFCannotEvade(t *testing.T) {
 	// same real IP is rate-limited regardless.
 	if code := send("2.2.2.2"); code != http.StatusServiceUnavailable {
 		t.Fatalf("rotated-spoof request status %d, want 503 (evasion not prevented)", code)
+	}
+}
+
+// TestRateLimitMiddlewareProxySpoofCannotEvade is the evasion guard for the
+// behind-a-proxy deployment (TrustedProxies > 0). The trusted proxy always
+// appends the genuine client to the right; the attacker controls only the
+// prepended prefix and rotates it each request. Both requests must key on the
+// same client, so the second trips the limiter. This pins the XFF index: a
+// regression that selected the leftmost (spoofed) entry would mint a fresh
+// bucket per request and this test would see a 200 instead of a 503.
+func TestRateLimitMiddlewareProxySpoofCannotEvade(t *testing.T) {
+	cfg := RateLimitConfig{Enabled: true, RPS: 1, Burst: 1, TrustedProxies: 1}
+	r := buildRateLimitedRouter(cfg)
+
+	send := func(spoofPrefix string) int {
+		req := httptest.NewRequest(http.MethodGet, "/x", nil)
+		req.RemoteAddr = "10.0.0.1:5000" // the trusted proxy
+		req.Header.Set("X-Forwarded-For", spoofPrefix+", 198.51.100.7")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	if code := send("9.9.9.9"); code != http.StatusOK {
+		t.Fatalf("first request status %d, want 200", code)
+	}
+	if code := send("8.8.8.8"); code != http.StatusServiceUnavailable {
+		t.Fatalf("rotated-prefix request status %d, want 503 (evasion not prevented)", code)
 	}
 }
 
