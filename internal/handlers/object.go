@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"io"
 	"net/http"
@@ -144,7 +145,8 @@ func DownloadObjectHandler(c *gin.Context) {
 	objectKey = filepath.Clean(objectKey)
 	filePath := filepath.Join(objectsRoot, bucketName, objectKey)
 
-	if _, err := os.Stat(filePath); err != nil {
+	info, err := os.Stat(filePath)
+	if err != nil {
 		respondError(c, http.StatusNotFound, "NoSuchKey", "Object not found")
 		return
 	}
@@ -176,7 +178,154 @@ func DownloadObjectHandler(c *gin.Context) {
 	// nothing for pre-migration objects whose sidecar lacked the key.
 	c.Header("ETag", etag)
 
-	c.File(filePath)
+	// Drop the sidecar Content-Length: ServeContent recomputes it from the
+	// open file and, on a 206, must report the slice length — not the full
+	// object size that applyMetadataHeaders copied from the sidecar. Leaving
+	// it would emit a wrong Content-Length on partial reads.
+	c.Writer.Header().Del("Content-Length")
+
+	// Pre-classify any Range header before handing the request to
+	// ServeContent. The stdlib parser is RFC-correct for satisfiable ranges
+	// but treats a malformed header as a 416 "invalid range"; S3 (RFC 7233
+	// §3.1) instead ignores a header it cannot understand and returns the
+	// full 200 body. It also omits Content-Range when an overflowing first-
+	// byte-pos fails integer parsing. We normalise both edges here so the
+	// surface matches S3 exactly, then let ServeContent stream the slice.
+	switch classifyRange(c.GetHeader("Range"), info.Size()) {
+	case rangeIgnore:
+		// Strip the header so ServeContent serves the unconditional 200 body.
+		c.Request.Header.Del("Range")
+	case rangeUnsatisfiable:
+		// 416 with "bytes */total" and the range advertisement, matching what
+		// ServeContent emits for an overlapping-but-out-of-bounds range — but
+		// applied uniformly, including the overflow case ServeContent drops.
+		c.Header("Accept-Ranges", "bytes")
+		c.Header("Content-Range", "bytes */"+strconv.FormatInt(info.Size(), 10))
+		c.Status(http.StatusRequestedRangeNotSatisfiable)
+		// Flush now: gin defers WriteHeader until the first body write, but a
+		// 416 carries no body, so without this the recorded status stays 200.
+		c.Writer.WriteHeaderNow()
+		return
+	case rangeSatisfiable:
+		// Leave the header in place; ServeContent re-parses it and produces
+		// the 206 with the correct Content-Range/Content-Length.
+	}
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "InternalError", "Error opening object")
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	// ServeContent owns satisfiable single/multi-range streaming: 206 status,
+	// Content-Range, Accept-Ranges, and If-Range. It streams the requested
+	// slice via Seek rather than buffering the object, so a partial read never
+	// allocates the whole file. Content-Type is left untouched because we
+	// already set it from the sidecar (an empty value would otherwise trigger
+	// content sniffing inside ServeContent). The name argument is only used for
+	// that sniffing fallback, so it is irrelevant here. modtime drives
+	// Last-Modified/If-Modified-Since and If-Range.
+	http.ServeContent(c.Writer, c.Request, "", info.ModTime(), f)
+}
+
+// rangeClass is the result of pre-validating a Range request header against a
+// known object size, decoupling our S3-correct semantics from the stdlib's.
+type rangeClass int
+
+const (
+	// rangeIgnore: no Range header, an unknown unit, or a malformed value.
+	// Per RFC 7233 §3.1 the server ignores it and returns the full body.
+	rangeIgnore rangeClass = iota
+	// rangeSatisfiable: a syntactically valid byte range that overlaps the
+	// object; ServeContent will emit the 206 slice.
+	rangeSatisfiable
+	// rangeUnsatisfiable: a syntactically valid range whose first-byte-pos is
+	// at or beyond the object size (including values too large to fit int64);
+	// the caller emits 416 with "bytes */total".
+	rangeUnsatisfiable
+)
+
+// classifyRange decides how a single-range "bytes=" header should be handled
+// for an object of the given size. It accepts only the single-range forms S3
+// serves (start-end, start-, -suffix); a multi-range or unparseable value is
+// ignored so the full body is returned rather than risking a stdlib 416.
+//
+// All arithmetic is bounded by size and overflow-safe: out-of-int64 numbers
+// surface as a ParseInt error and route to rangeIgnore/rangeUnsatisfiable
+// rather than wrapping, so a hostile "bytes=0-99999999999999999999" can never
+// drive a negative length, an out-of-bounds seek, or an allocation blowup.
+func classifyRange(header string, size int64) rangeClass {
+	const prefix = "bytes="
+	if header == "" || !strings.HasPrefix(header, prefix) {
+		return rangeIgnore
+	}
+	spec := strings.TrimSpace(header[len(prefix):])
+	// Reject multi-range up front: the comma form is valid HTTP but S3 only
+	// honours a single range, and ServeContent would otherwise build a
+	// multipart/byteranges body we never want to emit here.
+	if spec == "" || strings.Contains(spec, ",") {
+		return rangeIgnore
+	}
+
+	startStr, endStr, ok := strings.Cut(spec, "-")
+	if !ok {
+		return rangeIgnore
+	}
+	startStr = strings.TrimSpace(startStr)
+	endStr = strings.TrimSpace(endStr)
+
+	if startStr == "" {
+		return classifySuffixRange(endStr, size)
+	}
+	return classifyOffsetRange(startStr, endStr, size)
+}
+
+// classifySuffixRange handles the "bytes=-N" suffix form (last N bytes). A
+// zero or non-numeric/overflowing suffix is malformed and ignored; a positive
+// suffix always overlaps a non-empty object (the server clamps it to size), so
+// it is satisfiable, while an empty object can satisfy no suffix.
+func classifySuffixRange(suffix string, size int64) rangeClass {
+	n, err := strconv.ParseInt(suffix, 10, 64)
+	if err != nil || n <= 0 {
+		return rangeIgnore
+	}
+	if size == 0 {
+		return rangeUnsatisfiable
+	}
+	return rangeSatisfiable
+}
+
+// classifyOffsetRange handles "bytes=start-" and "bytes=start-end". A
+// non-numeric/overflowing or negative start is malformed (ignored); a start at
+// or past size is unsatisfiable (416); otherwise the end is validated and the
+// range is satisfiable.
+func classifyOffsetRange(startStr, endStr string, size int64) rangeClass {
+	start, err := strconv.ParseInt(startStr, 10, 64)
+	if err != nil {
+		// A numeric start that overflows int64 (ErrRange) is unambiguously past
+		// EOF, so it is unsatisfiable; any other parse error is malformed syntax
+		// and is ignored. This keeps a hostile "bytes=999...999-" as a clean 416
+		// rather than a 200 that quietly serves the whole object.
+		if errors.Is(err, strconv.ErrRange) {
+			return rangeUnsatisfiable
+		}
+		return rangeIgnore
+	}
+	if start < 0 {
+		return rangeIgnore
+	}
+	if start >= size {
+		return rangeUnsatisfiable
+	}
+	if endStr == "" {
+		return rangeSatisfiable
+	}
+	end, err := strconv.ParseInt(endStr, 10, 64)
+	if err != nil || end < start {
+		return rangeIgnore
+	}
+	return rangeSatisfiable
 }
 
 // DeleteObjectHandler deletes an object (file) from the specified bucket.
@@ -272,6 +421,10 @@ func GetObjectMetadataHandler(c *gin.Context) {
 
 	if c.Request.Method == http.MethodHead {
 		applyMetadataHeaders(c, metadata)
+		// Advertise range support so a client that probes with HEAD before a
+		// ranged GET sees the same Accept-Ranges the GET path emits via
+		// ServeContent. S3's HeadObject carries this header for the same reason.
+		c.Header("Accept-Ranges", "bytes")
 		c.Status(http.StatusOK)
 		return
 	}
