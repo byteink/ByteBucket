@@ -17,7 +17,7 @@ import (
 // public by design: credentials are collected client-side at login and sent
 // on every API call as X-Admin-* headers. The entire admin port is expected
 // to be bound to localhost or a private network — see SECURITY.md.
-func NewAdminRouter() *gin.Engine {
+func NewAdminRouter(rlCfg middleware.RateLimitConfig) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
@@ -31,6 +31,14 @@ func NewAdminRouter() *gin.Engine {
 	// what the logger can see in the Gin context.
 	r.Use(middleware.Log())
 	r.Use(middleware.Metrics())
+
+	// Rate limiting (opt-in) runs after Log/Metrics and before auth, matching
+	// the storage surface. Per-IP buckets isolate the loopback health probe
+	// from a flood originating elsewhere, so the orchestrator check survives
+	// an attack on other endpoints. Installed only when enabled.
+	if rlCfg.Enabled {
+		r.Use(middleware.RateLimit(rlCfg))
+	}
 
 	// Public, unauthenticated operational endpoints. They stay at the root
 	// level so existing probes, dashboards and scrapers keep working.

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -236,9 +237,82 @@ func run(ctx context.Context) error {
 	// the operator sees "localhost" until they configure a real origin.
 	handlers.SetPublicBaseURL(os.Getenv("PUBLIC_BASE_URL"))
 
-	storageSrv := newServer(":9000", withBodyLimit(router.NewStorageRouter(), storageBodyLimit))
-	adminSrv := newServer(":9001", withBodyLimit(router.NewAdminRouter(), adminBodyLimit))
+	// Request rate limiting is opt-in and OFF by default. When disabled the
+	// router omits the middleware entirely so a default deployment pays no
+	// per-request cost; see loadRateLimitConfig for the env contract.
+	rlCfg := loadRateLimitConfig()
+	if rlCfg.Enabled {
+		slog.Info("request rate limiting enabled",
+			"rps", rlCfg.RPS, "burst", rlCfg.Burst, "trusted_proxies", rlCfg.TrustedProxies)
+	}
+
+	storageSrv := newServer(":9000", withBodyLimit(router.NewStorageRouter(rlCfg), storageBodyLimit))
+	adminSrv := newServer(":9001", withBodyLimit(router.NewAdminRouter(rlCfg), adminBodyLimit))
 	return serve(ctx, storageSrv, adminSrv)
+}
+
+// loadRateLimitConfig resolves the RATE_LIMIT_* environment variables. It
+// mirrors the existing env-loading style (read string, parse, default on
+// malformed input) so operators tune limiting without a rebuild. Defaults
+// keep the feature off and harmless:
+//
+//   - RATE_LIMIT_ENABLED  (bool, default false) master switch.
+//   - RATE_LIMIT_RPS      (float, default 0) sustained requests/sec per client.
+//   - RATE_LIMIT_BURST    (int, default 0) token-bucket depth.
+//   - RATE_LIMIT_TRUSTED_PROXIES (int, default 0) reverse-proxy hops in front
+//     of this server, used to pick the real client IP out of X-Forwarded-For.
+//
+// A malformed numeric value is logged and treated as its zero default rather
+// than aborting startup: a rate-limit knob is not worth taking the process
+// down over, and the middleware clamps non-positive RPS/burst to safe floors.
+func loadRateLimitConfig() middleware.RateLimitConfig {
+	cfg := middleware.RateLimitConfig{
+		Enabled:        parseBoolEnv("RATE_LIMIT_ENABLED"),
+		RPS:            parseFloatEnv("RATE_LIMIT_RPS"),
+		Burst:          parseIntEnv("RATE_LIMIT_BURST"),
+		TrustedProxies: parseIntEnv("RATE_LIMIT_TRUSTED_PROXIES"),
+	}
+	return cfg
+}
+
+// parseBoolEnv reads a boolean env var. Empty or malformed values are false,
+// matching the deny-by-default posture for an opt-in feature.
+func parseBoolEnv(key string) bool {
+	v, err := strconv.ParseBool(strings.TrimSpace(os.Getenv(key)))
+	if err != nil {
+		return false
+	}
+	return v
+}
+
+// parseFloatEnv reads a float env var, returning 0 on empty/malformed input
+// and logging the bad value so a typo is visible rather than silent.
+func parseFloatEnv(key string) float64 {
+	s := strings.TrimSpace(os.Getenv(key))
+	if s == "" {
+		return 0
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		slog.Warn("ignoring malformed env value", "key", key, "value", s)
+		return 0
+	}
+	return v
+}
+
+// parseIntEnv reads an integer env var, returning 0 on empty/malformed input
+// and logging the bad value so a typo is visible rather than silent.
+func parseIntEnv(key string) int {
+	s := strings.TrimSpace(os.Getenv(key))
+	if s == "" {
+		return 0
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		slog.Warn("ignoring malformed env value", "key", key, "value", s)
+		return 0
+	}
+	return v
 }
 
 // serve starts both servers and blocks until ctx cancels or one of them errs,
