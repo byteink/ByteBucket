@@ -8,6 +8,7 @@ import {
   type CannedACL,
 } from '../lib/s3';
 import { loadSession } from '../lib/session';
+import { ErrorBanner } from '../components/ErrorBanner';
 
 interface BucketRow {
   name: string;
@@ -104,7 +105,7 @@ export default function BucketsPage() {
         </div>
       </div>
 
-      {error && <div className="text-xs text-ink-900 border-l-2 border-ink-900 pl-3 mb-4">{error}</div>}
+      {error && <ErrorBanner message={error} className="mb-4" />}
 
       {buckets === null ? (
         <p className="text-ink-500 text-sm">Loading.</p>

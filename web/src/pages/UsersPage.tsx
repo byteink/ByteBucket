@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ACLRule, createUser, CreatedUser, deleteUser, listUsers, updateUserACL, User } from '../lib/admin';
 import { loadSession } from '../lib/session';
+import { copyText } from '../lib/clipboard';
+import { ErrorBanner } from '../components/ErrorBanner';
 
 // Least-privilege default: no rules. The operator explicitly edits the ACL
 // after creation to grant bucket / action access, or the admin wildcard
@@ -114,7 +116,7 @@ export default function UsersPage() {
         <button className="btn-primary" onClick={onCreate}>New user</button>
       </div>
 
-      {error && <div className="text-xs text-ink-900 border-l-2 border-ink-900 pl-3 mb-4">{error}</div>}
+      {error && <ErrorBanner message={error} className="mb-4" />}
 
       {users === null ? (
         <p className="text-ink-500 text-sm">Loading.</p>
@@ -205,7 +207,7 @@ export default function UsersPage() {
 function CreatedUserModal({ user, onClose }: { user: CreatedUser; onClose: () => void }) {
   async function copy(value: string) {
     try {
-      await navigator.clipboard.writeText(value);
+      await copyText(value);
     } catch {
       /* ignore */
     }

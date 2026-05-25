@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { saveSession } from '../lib/session';
 import { checkAdminAuth } from '../lib/admin';
 import ThemeToggle from '../components/ThemeToggle';
+import { ErrorBanner } from '../components/ErrorBanner';
 
 // LoginPage collects admin credentials. There is no separate storage endpoint
 // any more: the UI and the storage API are same-origin on the admin port.
@@ -63,11 +64,7 @@ export default function LoginPage() {
               required
             />
           </div>
-          {error && (
-            <div role="alert" className="text-xs text-ink-900 border-l-2 border-ink-900 pl-3">
-              {error}
-            </div>
-          )}
+          {error && <ErrorBanner message={error} />}
           <button type="submit" disabled={busy} className="btn-primary w-full">
             {busy ? 'Signing in' : 'Sign in'}
           </button>

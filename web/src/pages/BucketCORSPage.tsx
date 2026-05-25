@@ -8,6 +8,7 @@ import {
   putBucketCORS,
 } from '../lib/s3';
 import { loadSession } from '../lib/session';
+import { ErrorBanner } from '../components/ErrorBanner';
 
 const defaultConfig: BucketCORSConfig = {
   CORSRules: [
@@ -106,7 +107,7 @@ export default function BucketCORSPage() {
         </div>
       </div>
 
-      {error && <div className="text-xs text-ink-900 border-l-2 border-ink-900 pl-3 mb-4 whitespace-pre-wrap">{error}</div>}
+      {error && <ErrorBanner message={error} className="mb-4" />}
       {status && <div className="text-xs text-ink-500 mb-4">{status}</div>}
 
       {loaded ? (

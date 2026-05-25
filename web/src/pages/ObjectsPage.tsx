@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { deleteObject, getObject, putObject, putObjectACL, type CannedACL } from '../lib/s3';
 import { loadSession } from '../lib/session';
 import { useObjectListing, type ObjectRow } from '../lib/useObjectListing';
+import { ErrorBanner } from '../components/ErrorBanner';
 
 export default function ObjectsPage() {
   const { name } = useParams<{ name: string }>();
@@ -152,7 +153,7 @@ export default function ObjectsPage() {
         Drop files here to upload{prefix ? ` into ${prefix}` : ''}
       </div>
 
-      {error && <div className="text-xs text-ink-900 border-l-2 border-ink-900 pl-3 mb-4">{error}</div>}
+      {error && <ErrorBanner message={error} className="mb-4" />}
 
       {rows === null ? (
         <p className="text-ink-500 text-sm">Loading.</p>
