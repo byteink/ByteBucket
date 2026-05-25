@@ -57,10 +57,12 @@ func ValidateBucketName(name string) error {
 	return nil
 }
 
-// reservedSidecarSuffix is the meta-sidecar extension. Any key that ends
-// with this is rejected so a hostile caller cannot overwrite a real
-// object's metadata by uploading a file at the matching path.
-const reservedSidecarSuffix = ".meta"
+// reservedSidecarSuffixes are the per-object sidecar extensions. Any key
+// ending with one is rejected so a hostile caller cannot overwrite a real
+// object's metadata (.meta) or tag set (.tags.json) by uploading a file at
+// the matching path. These are suffixes, not exact names, because an object
+// "photo.jpg" stores its sidecars as "photo.jpg.meta" / "photo.jpg.tags.json".
+var reservedSidecarSuffixes = []string{".meta", ".tags.json"}
 
 // reservedBucketSidecars are exact file names at the bucket root that hold
 // per-bucket subresources (ACL, CORS). Allowing an object PUT to land on
@@ -80,7 +82,7 @@ var reservedBucketSidecars = map[string]struct{}{
 //   - no path traversal: cleaned key must not begin with ".." and the
 //     cleaned form must match the input modulo a single leading slash
 //   - not match a reserved sidecar name at any depth
-//   - not end with the .meta suffix
+//   - not end with a reserved sidecar suffix (.meta, .tags.json)
 //
 // The cleaned form is returned so callers can use it for all downstream
 // filesystem operations — accepting one shape and persisting another would
@@ -116,18 +118,31 @@ func ValidateObjectKey(key string) (string, error) {
 	if clean == "" {
 		return "", ErrInvalidObjectKey
 	}
-	// Reject any segment that is "" (double-slash), "." or "..".
-	segments := strings.Split(clean, "/")
-	for _, seg := range segments {
-		if seg == "" || seg == "." || seg == ".." {
-			return "", ErrInvalidObjectKey
-		}
-		if strings.HasSuffix(seg, reservedSidecarSuffix) {
-			return "", ErrInvalidObjectKey
-		}
-		if _, bad := reservedBucketSidecars[seg]; bad {
+	// Reject any segment that is "" (double-slash), "." or "..", or that
+	// collides with a reserved sidecar name/suffix at any depth.
+	for _, seg := range strings.Split(clean, "/") {
+		if !segmentIsSafe(seg) {
 			return "", ErrInvalidObjectKey
 		}
 	}
 	return clean, nil
+}
+
+// segmentIsSafe reports whether a single path segment is a legal object-key
+// component. It rejects empty/relative segments and any name that would land
+// on a reserved sidecar (exact bucket sidecars or per-object suffixes), so a
+// hostile key cannot clobber ACL/CORS/meta/tags state at any nesting depth.
+func segmentIsSafe(seg string) bool {
+	if seg == "" || seg == "." || seg == ".." {
+		return false
+	}
+	if _, bad := reservedBucketSidecars[seg]; bad {
+		return false
+	}
+	for _, suffix := range reservedSidecarSuffixes {
+		if strings.HasSuffix(seg, suffix) {
+			return false
+		}
+	}
+	return true
 }

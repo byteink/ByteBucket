@@ -9,24 +9,24 @@ import (
 func TestValidateBucketName(t *testing.T) {
 	cases := map[string]bool{
 		// good
-		"a":               true,
-		"ab":              true,
-		"my-bucket":       true,
-		"product-images":  true,
-		"a1b2c3":          true,
+		"a":              true,
+		"ab":             true,
+		"my-bucket":      true,
+		"product-images": true,
+		"a1b2c3":         true,
 		// bad
-		"":                false,
-		"UPPER":           false,
-		"with.dot":        false,
-		"with_underscore": false,
-		"-leading":        false,
-		"trailing-":       false,
-		"double--hyphen":  false,
-		"with/slash":      false,
-		"../etc":          false,
-		"..":              false,
-		".":               false,
-		"a%00b":           false,
+		"":                      false,
+		"UPPER":                 false,
+		"with.dot":              false,
+		"with_underscore":       false,
+		"-leading":              false,
+		"trailing-":             false,
+		"double--hyphen":        false,
+		"with/slash":            false,
+		"../etc":                false,
+		"..":                    false,
+		".":                     false,
+		"a%00b":                 false,
 		strings.Repeat("a", 64): false,
 	}
 	for in, ok := range cases {
@@ -68,6 +68,9 @@ func TestValidateObjectKey(t *testing.T) {
 		{".cors.json", false, ""},
 		{"data.txt.meta", false, ""},
 		{"folder/data.meta", false, ""},
+		{".tags.json", false, ""},
+		{"file.txt.tags.json", false, ""},
+		{"folder/photo.jpg.tags.json", false, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {

@@ -285,10 +285,14 @@ type listCommonPrefix struct {
 const listMaxKeys = 1000
 
 // isSidecar reports whether a file name is one of our internal sidecars
-// (.meta, .cors.json, .acl.json). Used at every recursion depth so a key
-// like "data/.meta" is excluded just as reliably as "/data/foo.txt.meta".
+// (.meta, .tags.json, .cors.json, .acl.json). Used at every recursion depth so
+// a key like "data/.meta" is excluded just as reliably as "/data/foo.txt.meta".
+// Per-object sidecars are suffix-matched because they hang off the object name
+// (e.g. "photo.jpg.tags.json"); per-bucket sidecars are exact names.
 func isSidecar(name string) bool {
-	return strings.HasSuffix(name, ".meta") || name == ".cors.json" || name == ".acl.json"
+	return strings.HasSuffix(name, ".meta") ||
+		strings.HasSuffix(name, ".tags.json") ||
+		name == ".cors.json" || name == ".acl.json"
 }
 
 // ListObjectsHandler implements S3 ListObjects / ListObjectsV2 semantics:

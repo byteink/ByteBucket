@@ -71,6 +71,10 @@ func dispatchObjectPUT(c *gin.Context) {
 		handlers.PutObjectACLHandler(c)
 		return
 	}
+	if _, ok := q["tagging"]; ok {
+		handlers.PutObjectTaggingHandler(c)
+		return
+	}
 	if q.Get("uploadId") != "" && q.Get("partNumber") != "" {
 		handlers.UploadPartHandler(c)
 		return
@@ -88,6 +92,10 @@ func dispatchObjectGET(c *gin.Context) {
 		handlers.GetObjectACLHandler(c)
 		return
 	}
+	if _, ok := q["tagging"]; ok {
+		handlers.GetObjectTaggingHandler(c)
+		return
+	}
 	if _, ok := q["presign"]; ok {
 		handlers.PresignObjectHandler(c)
 		return
@@ -102,7 +110,12 @@ func dispatchObjectGET(c *gin.Context) {
 // dispatchObjectDELETE routes DELETE between plain object delete and
 // AbortMultipartUpload.
 func dispatchObjectDELETE(c *gin.Context) {
-	if c.Request.URL.Query().Get("uploadId") != "" {
+	q := c.Request.URL.Query()
+	if _, ok := q["tagging"]; ok {
+		handlers.DeleteObjectTaggingHandler(c)
+		return
+	}
+	if q.Get("uploadId") != "" {
 		handlers.AbortMultipartUploadHandler(c)
 		return
 	}
