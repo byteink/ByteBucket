@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -21,11 +22,15 @@ import (
 const slowDownMessage = "Reduce your request rate"
 
 // RateLimitConfig captures the operator-tunable knobs for request rate
-// limiting. It is built once at startup from environment variables (see
-// cmd/ByteBucket) and never mutated afterwards, so reads need no locking.
+// limiting. The environment seeds a baseline at startup (see cmd/ByteBucket);
+// an admin may then override it at runtime via the admin API, and the override
+// wins. RateLimitController owns the live value behind an atomic pointer, so a
+// config swap is visible to in-flight requests without locking and without a
+// restart. Pass copies, never share a pointer to a mutated value.
 //
-// The feature is opt-in: when Enabled is false the router does not install
-// the middleware at all, so a default deployment pays zero per-request cost.
+// The feature is opt-in: a request only pays the limiter cost when the live
+// config has Enabled true. When disabled the middleware is still mounted but
+// short-circuits after a single atomic load, so the disabled path stays cheap.
 type RateLimitConfig struct {
 	Enabled bool
 	// RPS is the sustained token refill rate per client IP, in tokens per
@@ -110,6 +115,26 @@ func newRateLimiter(rps float64, burst int) *rateLimiter {
 	}
 	go rl.janitor()
 	return rl
+}
+
+// reconfigure swaps the rate/burst applied to new buckets and flushes the live
+// map so the change takes effect uniformly and immediately for every client,
+// not just IPs first seen after the swap. The same clamps as newRateLimiter
+// apply. Flushing is bounded work (a single map replacement) and runs only on
+// the rare admin-driven reconfigure path, so it does not weaken the
+// Power-of-10 bound on the live set.
+func (rl *rateLimiter) reconfigure(rps float64, burst int) {
+	if rps <= 0 {
+		rps = 1
+	}
+	if burst < 1 {
+		burst = 1
+	}
+	rl.mu.Lock()
+	rl.rps = rate.Limit(rps)
+	rl.burst = burst
+	rl.entries = make(map[string]*limiterEntry, 1024)
+	rl.mu.Unlock()
 }
 
 // allow reports whether a request keyed by key may proceed. It consumes one
@@ -271,28 +296,80 @@ func splitTrim(s string) []string {
 	return out
 }
 
-// RateLimit returns a Gin middleware that throttles requests per resolved
-// client IP using a token bucket. It is mounted EARLY in both chains — after
-// RequestID/Log/Metrics (so a throttled request is still observable and
-// carries a correlatable ID) but BEFORE auth (so an unauthenticated flood is
-// rejected before it can reach the comparatively expensive signature
-// verification and filesystem ACL lookups). Throttling the unauthenticated
-// surface is the primary goal; an attacker need not hold credentials to flood.
+// RateLimitController owns the live rate-limit configuration and the single
+// bounded token-bucket store behind it. It is created once at startup from the
+// environment baseline and shared by both HTTP surfaces (port 9000 and 9001),
+// so a client's combined request stream is throttled against one per-IP budget
+// and an admin override applies everywhere at once. The config is held in an
+// atomic pointer: Middleware reads it per request without locking, and Apply
+// swaps it without a restart.
+type RateLimitController struct {
+	rl  *rateLimiter
+	cfg atomic.Pointer[RateLimitConfig]
+}
+
+// NewRateLimitController builds the controller from the startup (environment)
+// config. The token-bucket store is created unconditionally — even when the
+// config is disabled — so a later runtime Apply can enable limiting without
+// re-plumbing the middleware. The store is idle (no buckets, no admits) while
+// disabled, so this costs one goroutine and an empty map.
+func NewRateLimitController(cfg RateLimitConfig) *RateLimitController {
+	rc := &RateLimitController{rl: newRateLimiter(cfg.RPS, cfg.Burst)}
+	cp := cfg
+	rc.cfg.Store(&cp)
+	return rc
+}
+
+// Apply swaps the live config and reconfigures the underlying store so the new
+// rate/burst take effect immediately for all clients. Safe to call from a
+// request handler (the admin API) while other requests are in flight.
+func (rc *RateLimitController) Apply(cfg RateLimitConfig) {
+	rc.rl.reconfigure(cfg.RPS, cfg.Burst)
+	cp := cfg
+	rc.cfg.Store(&cp)
+}
+
+// Current returns a copy of the live config for the admin API to report.
+func (rc *RateLimitController) Current() RateLimitConfig {
+	if p := rc.cfg.Load(); p != nil {
+		return *p
+	}
+	return RateLimitConfig{}
+}
+
+// Middleware returns the Gin handler that throttles requests per resolved
+// client IP. It is mounted EARLY in both chains — after RequestID/Log/Metrics
+// (so a throttled request is still observable and carries a correlatable ID)
+// but BEFORE auth (so an unauthenticated flood is rejected before it reaches
+// the comparatively expensive signature verification and filesystem ACL
+// lookups). Throttling the unauthenticated surface is the primary goal; an
+// attacker need not hold credentials to flood.
 //
-// The caller installs this only when cfg.Enabled is true, so the disabled path
-// is a true no-op with zero per-request overhead.
-func RateLimit(cfg RateLimitConfig) gin.HandlerFunc {
-	rl := newRateLimiter(cfg.RPS, cfg.Burst)
-	trusted := cfg.TrustedProxies
+// Unlike the previous design the handler is mounted unconditionally; when the
+// live config is disabled it returns after a single atomic load, so the
+// disabled path stays cheap while still allowing a runtime enable.
+func (rc *RateLimitController) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		key := clientIP(c.Request, trusted)
-		if rl.allow(key) {
+		cfg := rc.cfg.Load()
+		if cfg == nil || !cfg.Enabled {
+			c.Next()
+			return
+		}
+		key := clientIP(c.Request, cfg.TrustedProxies)
+		if rc.rl.allow(key) {
 			c.Next()
 			return
 		}
 		c.Header("Retry-After", strconv.Itoa(slowDownRetryAfterSeconds))
 		writeSlowDown(c)
 	}
+}
+
+// RateLimit returns a standalone throttling middleware for a static config. It
+// is a thin wrapper over a dedicated controller, retained for tests and any
+// caller that does not need runtime reconfiguration.
+func RateLimit(cfg RateLimitConfig) gin.HandlerFunc {
+	return NewRateLimitController(cfg).Middleware()
 }
 
 // writeSlowDown emits a protocol-correct throttle response and aborts the

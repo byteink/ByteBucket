@@ -237,17 +237,27 @@ func run(ctx context.Context) error {
 	// the operator sees "localhost" until they configure a real origin.
 	handlers.SetPublicBaseURL(os.Getenv("PUBLIC_BASE_URL"))
 
-	// Request rate limiting is opt-in and OFF by default. When disabled the
-	// router omits the middleware entirely so a default deployment pays no
-	// per-request cost; see loadRateLimitConfig for the env contract.
+	// Request rate limiting is opt-in and OFF by default; the environment
+	// seeds a baseline (see loadRateLimitConfig for the env contract). The
+	// controller is shared by both surfaces and is always installed — disabled
+	// just means it short-circuits — so an admin can enable or retune it at
+	// runtime via the admin API without a restart.
 	rlCfg := loadRateLimitConfig()
-	if rlCfg.Enabled {
+	rlCtrl := middleware.NewRateLimitController(rlCfg)
+	handlers.SetRateLimitController(rlCtrl, rlCfg)
+	// A persisted runtime override wins over the environment baseline and
+	// survives restarts; apply it before the servers accept traffic.
+	eff, err := handlers.InitRateLimitFromStore()
+	if err != nil {
+		return err
+	}
+	if eff.Enabled {
 		slog.Info("request rate limiting enabled",
-			"rps", rlCfg.RPS, "burst", rlCfg.Burst, "trusted_proxies", rlCfg.TrustedProxies)
+			"rps", eff.RPS, "burst", eff.Burst, "trusted_proxies", eff.TrustedProxies)
 	}
 
-	storageSrv := newServer(":9000", withBodyLimit(router.NewStorageRouter(rlCfg), storageBodyLimit))
-	adminSrv := newServer(":9001", withBodyLimit(router.NewAdminRouter(rlCfg), adminBodyLimit))
+	storageSrv := newServer(":9000", withBodyLimit(router.NewStorageRouter(rlCtrl), storageBodyLimit))
+	adminSrv := newServer(":9001", withBodyLimit(router.NewAdminRouter(rlCtrl), adminBodyLimit))
 	return serve(ctx, storageSrv, adminSrv)
 }
 

@@ -22,6 +22,25 @@ export interface CreatedUser extends User {
   secretAccessKey: string;
 }
 
+// Admin API subpath for the runtime rate-limit override (GET/PUT/DELETE).
+const RATE_LIMIT_PATH = '/api/config/ratelimit';
+
+// RateLimitConfig mirrors the server's wire shape (internal/handlers/ratelimit).
+export interface RateLimitConfig {
+  enabled: boolean;
+  rps: number;
+  burst: number;
+  trustedProxies: number;
+}
+
+// RateLimitState carries the environment baseline, the persisted override
+// (null when none), and the effective config currently enforced.
+export interface RateLimitState {
+  env: RateLimitConfig;
+  override: RateLimitConfig | null;
+  effective: RateLimitConfig;
+}
+
 function authHeaders(s: Session): HeadersInit {
   return {
     'X-Admin-AccessKey': s.accessKey,
@@ -73,6 +92,30 @@ export async function deleteUser(s: Session, accessKeyID: string): Promise<void>
     headers: authHeaders(s),
   });
   if (!res.ok) throw new Error(await parseError(res));
+}
+
+export async function getRateLimit(s: Session): Promise<RateLimitState> {
+  const res = await fetch(RATE_LIMIT_PATH, { headers: authHeaders(s) });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as RateLimitState;
+}
+
+// putRateLimit persists a runtime override and returns the now-effective config.
+export async function putRateLimit(s: Session, cfg: RateLimitConfig): Promise<RateLimitConfig> {
+  const res = await fetch(RATE_LIMIT_PATH, {
+    method: 'PUT',
+    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return ((await res.json()) as { effective: RateLimitConfig }).effective;
+}
+
+// deleteRateLimit clears the override, reverting to the environment baseline.
+export async function deleteRateLimit(s: Session): Promise<RateLimitConfig> {
+  const res = await fetch(RATE_LIMIT_PATH, { method: 'DELETE', headers: authHeaders(s) });
+  if (!res.ok) throw new Error(await parseError(res));
+  return ((await res.json()) as { effective: RateLimitConfig }).effective;
 }
 
 // checkAdminAuth returns null when the current session is accepted by the admin

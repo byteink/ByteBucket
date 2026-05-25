@@ -66,6 +66,12 @@ func InitUserStore(fileName string) error {
 		if _, err := tx.CreateBucketIfNotExists([]byte("Users")); err != nil {
 			return err
 		}
+		// Config holds operator settings that survive restarts (e.g. the
+		// runtime rate-limit override). Kept in the same file as Users so
+		// there is a single durable store to back up and a single open handle.
+		if _, err := tx.CreateBucketIfNotExists([]byte(configBucket)); err != nil {
+			return err
+		}
 		log.Println("User store initialized at", dbPath)
 		return nil
 	})

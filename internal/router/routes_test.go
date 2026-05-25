@@ -25,7 +25,7 @@ func routeExists(r *gin.Engine, method, path string) bool {
 // a spot check.
 func TestStorageRouterRegistersS3Surface(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	r := NewStorageRouter(middleware.RateLimitConfig{})
+	r := NewStorageRouter(middleware.NewRateLimitController(middleware.RateLimitConfig{}))
 
 	cases := []struct{ method, path string }{
 		{"GET", "/"},
@@ -50,7 +50,7 @@ func TestStorageRouterRegistersS3Surface(t *testing.T) {
 // and without colliding with the SPA's client-side routes.
 func TestAdminRouterMountsStorageUnderAPIS3(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	r := NewAdminRouter(middleware.RateLimitConfig{})
+	r := NewAdminRouter(middleware.NewRateLimitController(middleware.RateLimitConfig{}))
 
 	cases := []struct{ method, path string }{
 		{"GET", "/api/s3/"},

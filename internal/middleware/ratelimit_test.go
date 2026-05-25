@@ -432,6 +432,102 @@ func TestRateLimitMiddlewareSpoofedXFFCannotEvade(t *testing.T) {
 	}
 }
 
+// buildControllerRouter mounts a controller's middleware in front of a trivial
+// 200 handler, exercising the same wiring the production routers install.
+func buildControllerRouter(rc *RateLimitController) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(RequestIDMiddleware())
+	r.Use(rc.Middleware())
+	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
+	return r
+}
+
+// sendFrom drives one request from a fixed client IP and returns the status.
+func sendFrom(r *gin.Engine, ip string) int {
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.RemoteAddr = ip + ":40000"
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w.Code
+}
+
+// TestControllerRuntimeEnable proves limiting can be switched on without
+// re-mounting the middleware: a disabled controller admits everything, and
+// after Apply with an enabled config the same handler throttles.
+func TestControllerRuntimeEnable(t *testing.T) {
+	rc := NewRateLimitController(RateLimitConfig{Enabled: false})
+	t.Cleanup(rc.rl.close)
+	r := buildControllerRouter(rc)
+
+	for i := 0; i < 5; i++ {
+		if code := sendFrom(r, "198.51.100.1"); code != http.StatusOK {
+			t.Fatalf("disabled controller throttled request %d (status %d)", i+1, code)
+		}
+	}
+
+	rc.Apply(RateLimitConfig{Enabled: true, RPS: 1, Burst: 1})
+	if code := sendFrom(r, "198.51.100.1"); code != http.StatusOK {
+		t.Fatalf("first request after enable status %d, want 200", code)
+	}
+	if code := sendFrom(r, "198.51.100.1"); code != http.StatusServiceUnavailable {
+		t.Fatalf("over-limit after enable status %d, want 503", code)
+	}
+}
+
+// TestControllerLiveReconfigureFlushes proves Apply flushes existing buckets so
+// a raised burst takes effect immediately for an already-seen client, not just
+// for IPs first seen after the swap.
+func TestControllerLiveReconfigureFlushes(t *testing.T) {
+	rc := NewRateLimitController(RateLimitConfig{Enabled: true, RPS: 1, Burst: 1})
+	t.Cleanup(rc.rl.close)
+	r := buildControllerRouter(rc)
+
+	if code := sendFrom(r, "198.51.100.2"); code != http.StatusOK {
+		t.Fatalf("first request status %d, want 200", code)
+	}
+	if code := sendFrom(r, "198.51.100.2"); code != http.StatusServiceUnavailable {
+		t.Fatalf("expected throttle before reconfigure, got %d", code)
+	}
+	rc.Apply(RateLimitConfig{Enabled: true, RPS: 1, Burst: 5})
+	if code := sendFrom(r, "198.51.100.2"); code != http.StatusOK {
+		t.Fatalf("request after reconfigure status %d, want 200 (flush did not apply)", code)
+	}
+}
+
+// TestControllerRuntimeDisable proves an enabled limiter can be turned off at
+// runtime, after which it admits without bound.
+func TestControllerRuntimeDisable(t *testing.T) {
+	rc := NewRateLimitController(RateLimitConfig{Enabled: true, RPS: 1, Burst: 1})
+	t.Cleanup(rc.rl.close)
+	r := buildControllerRouter(rc)
+
+	_ = sendFrom(r, "198.51.100.3")
+	if code := sendFrom(r, "198.51.100.3"); code != http.StatusServiceUnavailable {
+		t.Fatalf("expected throttle while enabled, got %d", code)
+	}
+	rc.Apply(RateLimitConfig{Enabled: false})
+	for i := 0; i < 5; i++ {
+		if code := sendFrom(r, "198.51.100.3"); code != http.StatusOK {
+			t.Fatalf("disabled controller throttled request %d (status %d)", i+1, code)
+		}
+	}
+}
+
+// TestControllerCurrent confirms Current reflects the seeded then applied config.
+func TestControllerCurrent(t *testing.T) {
+	rc := NewRateLimitController(RateLimitConfig{Enabled: false, RPS: 2, Burst: 3, TrustedProxies: 1})
+	t.Cleanup(rc.rl.close)
+	if got := rc.Current(); got.RPS != 2 || got.Burst != 3 || got.TrustedProxies != 1 || got.Enabled {
+		t.Fatalf("Current() = %+v, want seeded env config", got)
+	}
+	want := RateLimitConfig{Enabled: true, RPS: 9, Burst: 4, TrustedProxies: 2}
+	rc.Apply(want)
+	if got := rc.Current(); got != want {
+		t.Fatalf("Current() after Apply = %+v, want %+v", got, want)
+	}
+}
+
 // TestRateLimitMiddlewareProxySpoofCannotEvade is the evasion guard for the
 // behind-a-proxy deployment (TrustedProxies > 0). The trusted proxy always
 // appends the genuine client to the right; the attacker controls only the

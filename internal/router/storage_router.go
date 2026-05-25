@@ -11,9 +11,10 @@ import (
 // NewStorageRouter sets up Gin routes and middleware in an S3-compatible
 // manner. The route table is shared with the admin router via
 // RegisterStorageRoutes; this function only wires the SigV4-specific
-// middleware and public endpoints. rlCfg carries opt-in rate-limit settings;
-// when disabled the limiter middleware is not installed at all.
-func NewStorageRouter(rlCfg middleware.RateLimitConfig) *gin.Engine {
+// middleware and public endpoints. rlCtrl carries the live rate-limit
+// controller shared with the admin router; its middleware is always mounted
+// and short-circuits when limiting is disabled.
+func NewStorageRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
@@ -30,14 +31,13 @@ func NewStorageRouter(rlCfg middleware.RateLimitConfig) *gin.Engine {
 	// envelope. Label cardinality is bounded because path is c.FullPath().
 	r.Use(middleware.Metrics())
 
-	// Rate limiting (opt-in) runs after Log/Metrics so a throttled request is
-	// still observed and ID-tagged, but BEFORE auth and CORS so an
-	// unauthenticated flood is rejected before reaching signature
-	// verification and filesystem ACL lookups — the expensive, attacker-
-	// reachable surface this protects. Installed only when enabled.
-	if rlCfg.Enabled {
-		r.Use(middleware.RateLimit(rlCfg))
-	}
+	// Rate limiting runs after Log/Metrics so a throttled request is still
+	// observed and ID-tagged, but BEFORE auth and CORS so an unauthenticated
+	// flood is rejected before reaching signature verification and filesystem
+	// ACL lookups — the expensive, attacker-reachable surface this protects.
+	// Always mounted; the controller short-circuits when limiting is disabled
+	// so it can be enabled at runtime without a restart.
+	r.Use(rlCtrl.Middleware())
 
 	// Public health check (no authentication required).
 	r.GET("/health", handlers.HealthHandler)

@@ -88,18 +88,19 @@ All configuration is via environment variables.
 | `GIN_MODE` | no | `debug` | Set to `release` in production. The provided Docker image sets this. |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn`, `error`. |
 | `LOG_FORMAT` | no | `json` | `json` for production / log aggregators, `text` for local dev readability. |
-| `RATE_LIMIT_ENABLED` | no | `false` | Master switch for per-client request rate limiting. Off by default — the middleware is not installed at all, so there is zero per-request cost unless you opt in. |
+| `RATE_LIMIT_ENABLED` | no | `false` | Master switch for per-client request rate limiting. Off by default; when disabled the middleware short-circuits after one atomic read, so the per-request cost is negligible. Seeds the baseline that a runtime override (see below) can replace. |
 | `RATE_LIMIT_RPS` | no | `0` | Sustained requests per second allowed per client IP (token refill rate). Only meaningful when limiting is enabled. |
 | `RATE_LIMIT_BURST` | no | `0` | Token-bucket depth: the largest instantaneous spike one client may make before the sustained `RPS` rate gates it. |
 | `RATE_LIMIT_TRUSTED_PROXIES` | no | `0` | Number of reverse-proxy hops in front of the server. Selects which `X-Forwarded-For` entry is the real client. `0` ignores `X-Forwarded-For` and keys on the socket peer. |
 
 ### Rate limiting
 
-Off by default. Set `RATE_LIMIT_ENABLED=true` to throttle requests per client IP with a token bucket. It is installed on both ports early in the chain (after logging/metrics, before auth), so an unauthenticated flood is rejected before it reaches signature verification or the filesystem.
+Off by default. Set `RATE_LIMIT_ENABLED=true` to throttle requests per client IP with a token bucket. It runs early in the chain on both ports (after logging/metrics, before auth), so an unauthenticated flood is rejected before it reaches signature verification or the filesystem. Both ports share one per-IP budget, so a client cannot double its allowance by splitting traffic across the S3 and admin surfaces.
 
 - Set `RATE_LIMIT_RPS` (sustained rate) and `RATE_LIMIT_BURST` (spike depth) together. A request that exceeds its bucket gets `503 Slow Down` with a `Retry-After` header — AWS SDKs treat `SlowDown` as retryable and back off automatically.
 - **Behind a proxy**, set `RATE_LIMIT_TRUSTED_PROXIES` to the number of hops in front of ByteBucket (e.g. `1` for a single nginx / traefik / ALB). The client IP is resolved by counting that many trusted hops in from the right of `X-Forwarded-For`; the nearest proxy is the connection peer and is not in the header. Leaving it at `0` ignores `X-Forwarded-For` and keys on the socket peer — correct only when ByteBucket is directly exposed. Match it to your actual topology: setting it too low lets a client spoof its limiter key by prepending `X-Forwarded-For` entries.
 - The limiter store is bounded (hard entry cap plus idle eviction), so it cannot be turned into a memory-exhaustion vector by an attacker minting source IPs.
+- **Runtime override.** The `RATE_LIMIT_*` variables are only the startup baseline. An admin can enable, disable, or retune limiting at runtime from the dashboard's **Settings** page (or `PUT /api/config/ratelimit`) without a restart; changes apply live to both ports. A saved override is persisted and **wins over the environment** until you clear it ("Reset to defaults" / `DELETE /api/config/ratelimit`), which reverts to the `RATE_LIMIT_*` baseline.
 
 ### Ports
 

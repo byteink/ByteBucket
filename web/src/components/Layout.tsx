@@ -5,6 +5,7 @@ import ThemeToggle from './ThemeToggle';
 const navItems = [
   { to: '/buckets', label: 'Buckets' },
   { to: '/users', label: 'Users' },
+  { to: '/settings', label: 'Settings' },
 ];
 
 export default function Layout() {

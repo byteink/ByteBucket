@@ -9,6 +9,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// rateLimitConfigPath is the admin API subpath for the runtime rate-limit
+// override, registered for GET/PUT/DELETE below.
+const rateLimitConfigPath = "/config/ratelimit"
+
 // NewAdminRouter initializes the routes for admin operations.
 //
 // The embedded admin SPA is served at / (and any unknown path) without auth;
@@ -17,7 +21,7 @@ import (
 // public by design: credentials are collected client-side at login and sent
 // on every API call as X-Admin-* headers. The entire admin port is expected
 // to be bound to localhost or a private network — see SECURITY.md.
-func NewAdminRouter(rlCfg middleware.RateLimitConfig) *gin.Engine {
+func NewAdminRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
@@ -32,13 +36,13 @@ func NewAdminRouter(rlCfg middleware.RateLimitConfig) *gin.Engine {
 	r.Use(middleware.Log())
 	r.Use(middleware.Metrics())
 
-	// Rate limiting (opt-in) runs after Log/Metrics and before auth, matching
-	// the storage surface. Per-IP buckets isolate the loopback health probe
-	// from a flood originating elsewhere, so the orchestrator check survives
-	// an attack on other endpoints. Installed only when enabled.
-	if rlCfg.Enabled {
-		r.Use(middleware.RateLimit(rlCfg))
-	}
+	// Rate limiting runs after Log/Metrics and before auth, matching the
+	// storage surface. Per-IP buckets isolate the loopback health probe from a
+	// flood originating elsewhere, so the orchestrator check survives an attack
+	// on other endpoints. The same controller backs both surfaces, so a client
+	// is throttled against one shared budget. Always mounted; short-circuits
+	// when disabled so it can be enabled at runtime.
+	r.Use(rlCtrl.Middleware())
 
 	// Public, unauthenticated operational endpoints. They stay at the root
 	// level so existing probes, dashboards and scrapers keep working.
@@ -64,6 +68,9 @@ func NewAdminRouter(rlCfg middleware.RateLimitConfig) *gin.Engine {
 	api.Use(middleware.ValidateNames())
 	{
 		api.GET("/config", handlers.GetConfigHandler)
+		api.GET(rateLimitConfigPath, handlers.GetRateLimitHandler)
+		api.PUT(rateLimitConfigPath, handlers.PutRateLimitHandler)
+		api.DELETE(rateLimitConfigPath, handlers.DeleteRateLimitHandler)
 		api.POST("/users", handlers.CreateUserHandler)
 		api.GET("/users", handlers.ListUsersHandler)
 		api.PUT("/users/:accessKeyID", handlers.UpdateUserHandler)
