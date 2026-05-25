@@ -88,6 +88,18 @@ All configuration is via environment variables.
 | `GIN_MODE` | no | `debug` | Set to `release` in production. The provided Docker image sets this. |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn`, `error`. |
 | `LOG_FORMAT` | no | `json` | `json` for production / log aggregators, `text` for local dev readability. |
+| `RATE_LIMIT_ENABLED` | no | `false` | Master switch for per-client request rate limiting. Off by default — the middleware is not installed at all, so there is zero per-request cost unless you opt in. |
+| `RATE_LIMIT_RPS` | no | `0` | Sustained requests per second allowed per client IP (token refill rate). Only meaningful when limiting is enabled. |
+| `RATE_LIMIT_BURST` | no | `0` | Token-bucket depth: the largest instantaneous spike one client may make before the sustained `RPS` rate gates it. |
+| `RATE_LIMIT_TRUSTED_PROXIES` | no | `0` | Number of reverse-proxy hops in front of the server. Selects which `X-Forwarded-For` entry is the real client. `0` ignores `X-Forwarded-For` and keys on the socket peer. |
+
+### Rate limiting
+
+Off by default. Set `RATE_LIMIT_ENABLED=true` to throttle requests per client IP with a token bucket. It is installed on both ports early in the chain (after logging/metrics, before auth), so an unauthenticated flood is rejected before it reaches signature verification or the filesystem.
+
+- Set `RATE_LIMIT_RPS` (sustained rate) and `RATE_LIMIT_BURST` (spike depth) together. A request that exceeds its bucket gets `503 Slow Down` with a `Retry-After` header — AWS SDKs treat `SlowDown` as retryable and back off automatically.
+- **Behind a proxy**, set `RATE_LIMIT_TRUSTED_PROXIES` to the number of hops in front of ByteBucket (e.g. `1` for a single nginx / traefik / ALB). The client IP is resolved by counting that many trusted hops in from the right of `X-Forwarded-For`; the nearest proxy is the connection peer and is not in the header. Leaving it at `0` ignores `X-Forwarded-For` and keys on the socket peer — correct only when ByteBucket is directly exposed. Match it to your actual topology: setting it too low lets a client spoof its limiter key by prepending `X-Forwarded-For` entries.
+- The limiter store is bounded (hard entry cap plus idle eviction), so it cannot be turned into a memory-exhaustion vector by an attacker minting source IPs.
 
 ### Ports
 
@@ -103,7 +115,7 @@ One volume at `/data`. Layout:
 ```
 /data
   users.db              # BoltDB — users, ACLs, encrypted secrets
-  objects/<bucket>/...  # object bytes + .meta sidecars + .cors.json
+  objects/<bucket>/...  # object bytes + .meta / .tags.json / .acl.json / .cors.json sidecars
   uploads/<bucket>/...  # in-flight multipart uploads
 ```
 
@@ -132,8 +144,9 @@ Standard S3 surface. Any S3 client pointed at `http://<host>:9000` with `forcePa
 ### Operations
 
 - **Buckets** — `PUT /:bucket`, `GET /`, `GET /:bucket` (list objects), `DELETE /:bucket`, `HEAD /:bucket`.
-- **Objects** — `PUT /:bucket/:key`, `GET /:bucket/:key`, `HEAD /:bucket/:key`, `DELETE /:bucket/:key`.
+- **Objects** — `PUT /:bucket/:key`, `GET /:bucket/:key`, `HEAD /:bucket/:key`, `DELETE /:bucket/:key`. `GET` honours the `Range:` header for partial / resumable downloads, returning `206 Partial Content` with `Content-Range`; `HEAD` and full `GET` advertise `Accept-Ranges: bytes`.
 - **Multipart upload** — `POST /:bucket/:key?uploads`, `PUT /:bucket/:key?partNumber=N&uploadId=X`, `POST /:bucket/:key?uploadId=X` (complete), `DELETE /:bucket/:key?uploadId=X` (abort), `GET /:bucket?uploads` (list uploads), `GET /:bucket/:key?uploadId=X` (list parts).
+- **Object tagging** — `PUT /:bucket/:key?tagging`, `GET /:bucket/:key?tagging`, `DELETE /:bucket/:key?tagging`. Up to 10 tags per object (key 1-128, value 0-256 UTF-8 chars, no duplicate keys). Tags are stored in a `.tags.json` sidecar independently of object data, so setting or removing them never changes the object's ETag.
 - **CORS** — `PUT /:bucket?cors`, `GET /:bucket?cors`, `DELETE /:bucket?cors`.
 - **Presigned URLs** — SigV4 `X-Amz-*` query-string style, TTL up to the configured expiry, no server-side state needed.
 
@@ -212,6 +225,8 @@ Every S3 bucket and object operation is mounted at `/api/s3/*` with a JSON wire 
 - `GET /api/s3/:bucket/:key` — download (raw body).
 - `HEAD /api/s3/:bucket/:key` — metadata only.
 - `DELETE /api/s3/:bucket/:key` — delete.
+- `GET /api/s3/:bucket/:key` honours `Range:` (partial download) exactly as the SigV4 surface does.
+- `PUT|GET|DELETE /api/s3/:bucket/:key?tagging` — per-object tags as JSON (`{"tagSet":[{"key":"env","value":"prod"}]}`).
 - `PUT|GET|DELETE /api/s3/:bucket?cors` — per-bucket CORS as JSON.
 
 ### Example
@@ -388,6 +403,8 @@ Everything lives under `/data`:
     <bucket>/
       <object>                          # raw bytes
       <object>.meta                     # JSON sidecar: ETag, checksums, user metadata
+      <object>.tags.json                # JSON sidecar: object tag set (independent of ETag)
+      .acl.json                         # per-bucket canned ACL
       .cors.json                        # per-bucket CORS config
   uploads/
     <bucket>/
@@ -408,6 +425,8 @@ Everything lives under `/data`:
 - **Max request body**: 5 GiB on port 9000 (S3 single-PUT ceiling), 100 MiB on port 9001 (admin surface).
 - **Per-connection timeouts**: 10 s on headers, 5 min on read/write, 120 s idle. Very large single-PUT or GET on slow links may hit the 5-min bound; prefer multipart upload for anything above a few hundred MiB.
 - **Multipart**: 1 to 10000 parts per upload, no minimum part size enforced (real S3 requires 5 MiB for all but the last part — ByteBucket is lenient).
+- **Object tags**: up to 10 per object; key 1-128 and value 0-256 UTF-8 chars; no duplicate keys; tagging document capped at 16 KiB.
+- **Rate limiting**: off by default (see [Configuration](#configuration)). When enabled, requests are throttled per client IP and over-limit calls get `503 SlowDown` with `Retry-After`.
 - **Presigned URL expiry**: bounded by the request's `X-Amz-Expires` claim; no server-side cap beyond what the client signed.
 - **Versioning, object locking, server-side encryption, replication, and lifecycle policies**: not implemented.
 - **BoltDB** is a single-writer embedded DB. Fine for up to tens of thousands of users on a single node; don't expect horizontal scale.
