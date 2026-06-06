@@ -89,6 +89,11 @@ func dispatchObjectPUT(c *gin.Context) {
 		handlers.UploadPartHandler(c)
 		return
 	}
+	// A PUT carrying x-amz-copy-source is a server-side copy, not a body upload.
+	if c.GetHeader("x-amz-copy-source") != "" {
+		handlers.CopyObjectHandler(c)
+		return
+	}
 	handlers.UploadObjectHandler(c)
 }
 

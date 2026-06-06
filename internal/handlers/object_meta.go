@@ -22,6 +22,10 @@ import (
 // the response header and the XML listing.
 const etagMetaKey = "ETag"
 
+// contentTypeMetaKey is the sidecar/metadata-map key under which an object's
+// Content-Type is persisted; shared so the upload and copy paths agree.
+const contentTypeMetaKey = "Content-Type"
+
 // computeFileETag reads a file from disk and returns its ETag value in S3
 // wire format (hex md5, wrapped in double quotes). Used for the one-time
 // migration path: legacy objects written before ETag persistence landed have

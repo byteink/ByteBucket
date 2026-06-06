@@ -24,64 +24,14 @@ import (
 // UploadObjectHandler handles object uploads by reading the raw request body.
 func UploadObjectHandler(c *gin.Context) {
 	bucketName := c.Param("bucket")
-	objectKey := c.Param("objectKey")
-	objectKey = filepath.Clean(objectKey)
+	objectKey := filepath.Clean(c.Param("objectKey"))
 
 	// Resolve the canned ACL (if any) up-front so an invalid value rejects
-	// the request before we spend IO writing the body. An empty header means
-	// the object inherits the bucket ACL, so we only persist a value when the
-	// client explicitly set one.
-	aclHeader := c.GetHeader("x-amz-acl")
-	cannedACL := ""
-	if aclHeader != "" {
-		normalized, err := storage.NormalizeCannedACL(aclHeader)
-		if err != nil {
-			respondError(c, http.StatusBadRequest, "InvalidArgument", "Unsupported x-amz-acl value")
-			return
-		}
-		cannedACL = normalized
-	}
-
-	bucketPath := filepath.Join(objectsRoot, bucketName)
-	if err := os.MkdirAll(bucketPath, 0755); err != nil {
-		respondError(c, http.StatusInternalServerError, "InternalError", "Error creating bucket directory")
+	// the request before we spend IO writing the body.
+	cannedACL, ok := resolveCannedACL(c)
+	if !ok {
 		return
 	}
-
-	dstPath := filepath.Join(bucketPath, objectKey)
-	parentDir := filepath.Dir(dstPath)
-	if err := os.MkdirAll(parentDir, 0755); err != nil {
-		respondError(c, http.StatusInternalServerError, "InternalError", "Error creating parent directories")
-		return
-	}
-
-	f, err := os.Create(dstPath)
-	if err != nil {
-		respondError(c, http.StatusInternalServerError, "InternalError", "Error creating file")
-		return
-	}
-	// Close explicitly after streaming so an fsync/close failure surfaces as a
-	// 500 rather than being swallowed by a deferred close. The MD5 hasher is
-	// fed by the same MultiWriter as the CRC32 so we compute the S3 ETag in
-	// one pass without re-reading the file from disk.
-	crcHasher := crc32.NewIEEE()
-	md5Hasher := md5.New()
-	multiWriter := io.MultiWriter(f, crcHasher, md5Hasher)
-	written, err := io.Copy(multiWriter, c.Request.Body)
-	if err != nil {
-		_ = f.Close()
-		respondError(c, http.StatusInternalServerError, "InternalError", "Error saving file")
-		return
-	}
-	if err := f.Close(); err != nil {
-		respondError(c, http.StatusInternalServerError, "InternalError", "Error closing file")
-		return
-	}
-
-	checksumBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(checksumBytes, crcHasher.Sum32())
-	checksumBase64 := base64.StdEncoding.EncodeToString(checksumBytes)
-	etag := formatETag(md5Hasher)
 
 	metadata, mErr := collectUserMetadataChecked(c)
 	if mErr != nil {
@@ -89,32 +39,15 @@ func UploadObjectHandler(c *gin.Context) {
 			"x-amz-meta-* headers exceed 2 KiB total")
 		return
 	}
-	metadata["x-amz-checksum-crc32"] = checksumBase64
-	metadata[etagMetaKey] = etag
-	metadata["Content-Length"] = strconv.FormatInt(written, 10)
-	// Preserve the client-supplied Content-Type so GET emits a stable
-	// value. Without this the response carried no Content-Type at all,
-	// inviting MIME sniffing — combined with public-read that is a
-	// stored-XSS vector for any HTML payload. Default to
-	// application/octet-stream so SDKs that omit the header still get
-	// a sane non-sniffable value paired with nosniff at GET time.
-	if ct := strings.TrimSpace(c.GetHeader("Content-Type")); ct != "" {
-		metadata["Content-Type"] = ct
-	} else {
-		metadata["Content-Type"] = "application/octet-stream"
-	}
+	metadata["Content-Type"] = contentTypeOrOctet(c)
 	if cannedACL != "" {
 		metadata["acl"] = cannedACL
 	}
 
-	metadataPath := dstPath + ".meta"
-	metadataJSON, err := json.Marshal(metadata)
+	dstPath := filepath.Join(objectsRoot, bucketName, objectKey)
+	etag, _, err := finalizeObjectWrite(bucketName, dstPath, c.Request.Body, metadata)
 	if err != nil {
-		respondError(c, http.StatusInternalServerError, "InternalError", "Error encoding metadata")
-		return
-	}
-	if err := os.WriteFile(metadataPath, metadataJSON, 0644); err != nil {
-		respondError(c, http.StatusInternalServerError, "InternalError", "Error writing metadata")
+		respondError(c, http.StatusInternalServerError, "InternalError", "Error saving object")
 		return
 	}
 
@@ -125,15 +58,102 @@ func UploadObjectHandler(c *gin.Context) {
 		auditACLChange(c, "object", bucketName, objectKey, storage.ACLPrivate, cannedACL)
 	}
 
-	// Credit the new object's bytes against the bucket gauge. Best-effort
-	// delta — not recomputed at startup — so the value should be treated
-	// as a trendline, not an authoritative size report.
-	middleware.ObjectsBytesTotal.WithLabelValues(bucketName).Add(float64(written))
-
 	// ETag is part of the S3 PutObject response contract; SDKs read it and
 	// optionally verify against a client-side Content-MD5.
 	c.Header("ETag", etag)
 	c.Status(http.StatusOK)
+}
+
+// resolveCannedACL returns the validated canned ACL from the x-amz-acl header,
+// or "" when the header is absent (the object then inherits the bucket ACL).
+// On an unsupported value it writes the error response and returns ok=false.
+func resolveCannedACL(c *gin.Context) (string, bool) {
+	h := c.GetHeader("x-amz-acl")
+	if h == "" {
+		return "", true
+	}
+	normalized, err := storage.NormalizeCannedACL(h)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "InvalidArgument", "Unsupported x-amz-acl value")
+		return "", false
+	}
+	return normalized, true
+}
+
+// contentTypeOrOctet returns the request Content-Type, defaulting to
+// application/octet-stream so a stored object always carries a non-sniffable
+// type (paired with nosniff at GET time).
+func contentTypeOrOctet(c *gin.Context) string {
+	if ct := strings.TrimSpace(c.GetHeader("Content-Type")); ct != "" {
+		return ct
+	}
+	return "application/octet-stream"
+}
+
+// finalizeObjectWrite streams src into the object at dstPath, computing the S3
+// ETag and CRC32 in a single pass, then persists the .meta sidecar built from
+// meta plus the computed checksum/etag/length and credits the per-bucket byte
+// gauge. The bytes are written to a temp file and renamed into place, so a
+// crash never leaves a partial object and a copy whose source IS the
+// destination cannot truncate its own input mid-read. meta must already carry
+// Content-Type and any acl entry. Returns the ETag and bytes written.
+func finalizeObjectWrite(bucketName, dstPath string, src io.Reader, meta map[string]string) (string, int64, error) {
+	dir := filepath.Dir(dstPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", 0, err
+	}
+	tmp, err := os.CreateTemp(dir, ".upload-*")
+	if err != nil {
+		return "", 0, err
+	}
+	tmpName := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	// The MD5 and CRC32 hashers share the MultiWriter so the S3 ETag and the
+	// checksum are computed in one pass without re-reading from disk.
+	crcHasher := crc32.NewIEEE()
+	md5Hasher := md5.New()
+	written, err := io.Copy(io.MultiWriter(tmp, crcHasher, md5Hasher), src)
+	if err != nil {
+		_ = tmp.Close()
+		return "", 0, err
+	}
+	// Match the 0644 an os.Create would have produced; CreateTemp uses 0600.
+	if err := tmp.Chmod(0644); err != nil {
+		_ = tmp.Close()
+		return "", 0, err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", 0, err
+	}
+	if err := os.Rename(tmpName, dstPath); err != nil {
+		return "", 0, err
+	}
+	committed = true
+
+	checksumBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(checksumBytes, crcHasher.Sum32())
+	etag := formatETag(md5Hasher)
+	meta["x-amz-checksum-crc32"] = base64.StdEncoding.EncodeToString(checksumBytes)
+	meta[etagMetaKey] = etag
+	meta["Content-Length"] = strconv.FormatInt(written, 10)
+
+	metadataJSON, err := json.Marshal(meta)
+	if err != nil {
+		return "", 0, err
+	}
+	if err := os.WriteFile(dstPath+".meta", metadataJSON, 0644); err != nil {
+		return "", 0, err
+	}
+
+	// Best-effort gauge delta — a trendline, not an authoritative size report.
+	middleware.ObjectsBytesTotal.WithLabelValues(bucketName).Add(float64(written))
+	return etag, written, nil
 }
 
 // DownloadObjectHandler serves an object (file) from the specified bucket.

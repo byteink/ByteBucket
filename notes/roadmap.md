@@ -46,7 +46,7 @@ Highest impact: these are the ops common clients call and currently fail on.
 - Wire in `dispatchBucketSubresource` (POST is new on bucket path — add `g.POST("/:bucket", ...)`)
 - Probe: hostile keys (traversal) rejected; valid batch delete works
 
-### 2. CopyObject — NEXT
+### 2. CopyObject — DONE (2026-06-06)
 - Route: `PUT /:bucket/*key` with `x-amz-copy-source` header present
 - Same source==dest = metadata-only replace (`x-amz-metadata-directive: REPLACE`)
 - Copy object bytes + `.meta` sidecar; recompute ETag
@@ -54,7 +54,7 @@ Highest impact: these are the ops common clients call and currently fail on.
 - Enables rename/move flows
 - Probe: copy-source traversal rejected; valid copy works
 
-### 3. Conditional requests
+### 3. Conditional requests — NEXT
 - `If-Match` / `If-None-Match` / `If-Modified-Since` / `If-Unmodified-Since`
 - GET: `304 Not Modified` / `412 Precondition Failed`
 - PUT: `412` on mismatch (optimistic concurrency)
@@ -62,9 +62,12 @@ Highest impact: these are the ops common clients call and currently fail on.
 
 ## Phase 2 — durability & safety (harden what exists)
 
-### 4. Atomic writes + fsync
-- Write to temp file, `fsync`, then `rename` into place (object + `.meta`)
-- Today a crash mid-PUT can leave a partial object or a stale/orphaned sidecar
+### 4. Atomic writes + fsync — PARTIAL (2026-06-06)
+- DONE: object bytes now written via temp file + rename in `finalizeObjectWrite`
+  (shared by upload + copy), so a crash mid-PUT no longer leaves a partial object.
+- TODO: `fsync` the temp file before rename, and fsync the parent dir after, for
+  true crash durability. The `.meta` sidecar is still written in place (not yet
+  temp+renamed).
 
 ### 5. Concurrent-write safety
 - Per-object lock so two PUTs to the same key can't interleave object vs sidecar
@@ -122,4 +125,10 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
 - 2026-06-06: Phase 1.1 DeleteObjects DONE — POST /:bucket?delete, XML+JSON, per-key
   validation (traversal/sidecar -> per-key Error), 1000-key cap. Shared removeObject
   helper (refactored out of DeleteObjectHandler). Unit tests + AWS-SDK E2E + pentest
-  group (194 probes green). Next: Phase 1.2 CopyObject.
+  group (194 probes green).
+- 2026-06-06: Phase 1.2 CopyObject DONE — PUT + x-amz-copy-source, COPY/REPLACE
+  directive, validated copy-source (traversal/sidecar rejected), self-copy needs
+  REPLACE. Refactored upload+copy onto a shared finalizeObjectWrite (temp+rename,
+  which also delivers Phase 2.4 atomic writes partially). Caught+fixed a metadata
+  casing bug via TDD. Unit + AWS-SDK E2E + pentest (204 probes green). Next: Phase 1.3
+  conditional requests.
