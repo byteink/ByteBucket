@@ -106,8 +106,8 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
 ### A5. Audit log viewer — NEEDS BACKEND: ACL audit currently only slog'd, not stored.
    Requires persisting audit events before a read API/UI is possible. Larger; deferred.
 ### A6. Visual ACL editor for users — replace raw-JSON ACL with bucket x action matrix. UI polish.
-### A7. Upload (drag-drop) + multi-select delete — NEXT. delete pairs with Phase 1 DeleteObjects.
-### A8. Copy / move / rename — pairs with Phase 1 CopyObject.
+### A7. Upload (drag-drop) + multi-select delete — DONE (2026-06-07). Upload pre-existed; added batch delete.
+### A8. Copy / move / rename — DONE (2026-06-07). copyObject client + Rename (copy+delete) action.
 
 ## Phase 3 — feature depth (only with a real need)
 
@@ -158,4 +158,10 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
 - 2026-06-07: Phase A2 tagging editor DONE — s3.ts getObjectTagging/putObjectTagging
   + tag rows (add/remove/save) in ObjectDetailPage. Backend tagging already fully
   tested. Discovered A3 (bucket ACL toggle) + A4 (presign button) were already
-  implemented. Next: A7 multi-select delete (exercises DeleteObjects via UI).
+  implemented.
+- 2026-06-07: Phase A7 (batch delete) + A8 (rename/move) DONE — deleteObjects +
+  copyObject web clients, selection UI + Rename action in ObjectsPage. Exercise the
+  Phase 1 DeleteObjects/CopyObject backends (already E2E-tested) from the UI.
+  REMAINING: A5 (audit viewer — needs audit-event persistence first, a backend
+  feature), A6 (visual ACL matrix — polish over the working JSON editor),
+  Phase 3 (versioning/lifecycle — large; roadmap-gated to "real need only").

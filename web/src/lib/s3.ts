@@ -214,6 +214,26 @@ export async function getObject(s: Session, bucket: string, key: string): Promis
   return await res.blob();
 }
 
+// copyObject performs a server-side copy via x-amz-copy-source. The source key
+// is percent-encoded per segment to match the server's PathUnescape of the
+// header. Used for duplicate and (with a follow-up delete) rename/move.
+export async function copyObject(
+  s: Session,
+  bucket: string,
+  srcKey: string,
+  dstKey: string,
+): Promise<void> {
+  const source = `/${encodeURIComponent(bucket)}/${encPath(srcKey.split('/'))}`;
+  const res = await fetch(
+    `/api/s3/${encodeURIComponent(bucket)}/${encPath(dstKey.split('/'))}`,
+    {
+      method: 'PUT',
+      headers: { ...authHeaders(s), 'x-amz-copy-source': source },
+    },
+  );
+  if (!res.ok) await throwHTTP(res);
+}
+
 // deleteObjects removes up to 1000 keys in one batch via POST ?delete. Returns
 // the keys that failed (with a reason) so the caller can surface partial errors.
 export async function deleteObjects(

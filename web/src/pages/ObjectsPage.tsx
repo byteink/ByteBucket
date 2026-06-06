@@ -1,6 +1,7 @@
 import { ChangeEvent, DragEvent, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
+  copyObject,
   deleteObject,
   deleteObjects,
   getObject,
@@ -88,6 +89,20 @@ export default function ObjectsPage() {
     if (!session || !bucket) return;
     if (!window.confirm(`Delete ${key}?`)) return;
     try {
+      await deleteObject(session, bucket, key);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function onRename(key: string) {
+    if (!session || !bucket) return;
+    const dst = window.prompt('Move/rename to (full key within bucket):', key);
+    if (!dst || dst === key) return;
+    try {
+      // Copy then delete the source: the closest S3 has to an atomic rename.
+      await copyObject(session, bucket, key, dst);
       await deleteObject(session, bucket, key);
       await refresh();
     } catch (e) {
@@ -256,6 +271,9 @@ export default function ObjectsPage() {
                   </button>
                   <button className="btn h-7 px-2 text-xs mr-2" onClick={() => onDownload(o.key)}>
                     Download
+                  </button>
+                  <button className="btn h-7 px-2 text-xs mr-2" onClick={() => void onRename(o.key)}>
+                    Rename
                   </button>
                   <button className="btn-danger h-7 px-2 text-xs" onClick={() => onDelete(o.key)}>
                     Delete
