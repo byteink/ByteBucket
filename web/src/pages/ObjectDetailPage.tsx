@@ -6,10 +6,13 @@ import {
   getConfig,
   getObject,
   getObjectMetadata,
+  getObjectTagging,
   presignObject,
   putObjectACL,
+  putObjectTagging,
   type CannedACL,
   type ObjectMetadata,
+  type ObjectTag,
   type PresignedURL,
 } from '../lib/s3';
 import { loadSession } from '../lib/session';
@@ -36,6 +39,8 @@ export default function ObjectDetailPage() {
   const [previewText, setPreviewText] = useState<string | null>(null);
   const [presigned, setPresigned] = useState<PresignedURL | null>(null);
   const [presignTTL, setPresignTTL] = useState<number>(900);
+  const [tags, setTags] = useState<ObjectTag[] | null>(null);
+  const [tagsBusy, setTagsBusy] = useState(false);
 
   useEffect(() => {
     if (!session || !bucket || !key) return;
@@ -48,6 +53,7 @@ export default function ObjectDetailPage() {
           getConfig(session),
         ]);
         setState({ meta, bucketACL: bAcl, publicBaseURL: cfg.publicBaseURL });
+        setTags(await getObjectTagging(session, bucket, key));
 
         // Eagerly fetch the body for renderable content types. Anything
         // outside the renderable set is skipped — we never download large
@@ -162,6 +168,26 @@ export default function ObjectDetailPage() {
     }
   }
 
+  function patchTag(i: number, p: Partial<ObjectTag>) {
+    setTags((ts) => (ts ? ts.map((t, n) => (n === i ? { ...t, ...p } : t)) : ts));
+  }
+
+  async function onSaveTags() {
+    if (!session || !tags) return;
+    setError(null);
+    setTagsBusy(true);
+    try {
+      // Drop blank-key rows so an empty editor line is not sent as a tag.
+      const clean = tags.filter((t) => t.key.trim() !== '');
+      await putObjectTagging(session, bucket, key, clean);
+      setTags(clean);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTagsBusy(false);
+    }
+  }
+
   return (
     <section>
       <nav className="text-xs text-ink-500 mb-2">
@@ -265,6 +291,45 @@ export default function ObjectDetailPage() {
                 </div>
               </div>
             )}
+          </div>
+
+          <div className="mb-6">
+            <div className="flex items-baseline justify-between mb-1">
+              <div className="text-xs text-ink-500">Tags</div>
+              <button
+                className="btn h-7 px-2 text-xs"
+                disabled={!tags || tags.length >= 10}
+                onClick={() => setTags((ts) => (ts ? [...ts, { key: '', value: '' }] : ts))}
+              >
+                Add tag
+              </button>
+            </div>
+            {tags?.length === 0 && <div className="text-xs text-ink-500">No tags.</div>}
+            {tags?.map((t, i) => (
+              <div key={i} className="flex gap-2 mb-1">
+                <input
+                  className="input h-8 text-xs flex-1"
+                  placeholder="key"
+                  value={t.key}
+                  onChange={(e) => patchTag(i, { key: e.target.value })}
+                />
+                <input
+                  className="input h-8 text-xs flex-1"
+                  placeholder="value"
+                  value={t.value}
+                  onChange={(e) => patchTag(i, { value: e.target.value })}
+                />
+                <button
+                  className="btn h-8 px-2 text-xs"
+                  onClick={() => setTags((ts) => (ts ? ts.filter((_, n) => n !== i) : ts))}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            <button className="btn-primary h-8 px-3 text-xs mt-1" disabled={tagsBusy || !tags} onClick={onSaveTags}>
+              {tagsBusy ? 'Saving' : 'Save tags'}
+            </button>
           </div>
 
           <Preview

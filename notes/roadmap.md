@@ -100,12 +100,13 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   (bucket/object/byte counts via bounded store walk) + `/metrics` for request-rate
   charts.
 
-### A2. Object tagging editor (in ObjectDetail) — NEXT. `?tagging` API already exists.
-### A3. Bucket ACL toggle (private <-> public-read) — `?acl` already exists.
-### A4. Presigned link button (in ObjectDetail) — `?presign` already exists.
-### A5. Audit log viewer — ACL-change audit already recorded (`AuditACLChange`); add read-only trail.
-### A6. Visual ACL editor for users — replace raw-JSON ACL with bucket x action matrix.
-### A7. Upload (drag-drop) + multi-select delete — delete pairs with Phase 1 DeleteObjects.
+### A2. Object tagging editor (in ObjectDetail) — DONE (2026-06-07). getObjectTagging/putObjectTagging + editor UI.
+### A3. Bucket ACL toggle — ALREADY DONE (pre-existing BucketsPage.onToggleACL).
+### A4. Presigned link button — ALREADY DONE (pre-existing ObjectDetailPage.onPresign).
+### A5. Audit log viewer — NEEDS BACKEND: ACL audit currently only slog'd, not stored.
+   Requires persisting audit events before a read API/UI is possible. Larger; deferred.
+### A6. Visual ACL editor for users — replace raw-JSON ACL with bucket x action matrix. UI polish.
+### A7. Upload (drag-drop) + multi-select delete — NEXT. delete pairs with Phase 1 DeleteObjects.
 ### A8. Copy / move / rename — pairs with Phase 1 CopyObject.
 
 ## Phase 3 — feature depth (only with a real need)
@@ -153,4 +154,8 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   PHASE 2 COMPLETE.
 - 2026-06-07: Phase A1 dashboard DONE — GET /api/stats (bucket/object/byte totals
   via bounded store walk + cumulative request count from metrics registry) + React
-  DashboardPage + nav. Unit + E2E + pentest (220 green). Next: A2 tagging editor.
+  DashboardPage + nav. Unit + E2E + pentest (220 green).
+- 2026-06-07: Phase A2 tagging editor DONE — s3.ts getObjectTagging/putObjectTagging
+  + tag rows (add/remove/save) in ObjectDetailPage. Backend tagging already fully
+  tested. Discovered A3 (bucket ACL toggle) + A4 (presign button) were already
+  implemented. Next: A7 multi-select delete (exercises DeleteObjects via UI).

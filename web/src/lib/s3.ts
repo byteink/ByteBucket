@@ -320,6 +320,40 @@ export async function putObjectACL(
   if (!res.ok) await throwHTTP(res);
 }
 
+export interface ObjectTag {
+  key: string;
+  value: string;
+}
+
+// getObjectTagging reads the object's tag set via the admin JSON surface.
+export async function getObjectTagging(s: Session, bucket: string, key: string): Promise<ObjectTag[]> {
+  const res = await fetch(
+    `/api/s3/${encodeURIComponent(bucket)}/${encPath(key.split('/'))}?tagging`,
+    { headers: authHeaders(s) },
+  );
+  if (!res.ok) await throwHTTP(res);
+  const body = (await res.json()) as { tagSet?: ObjectTag[] };
+  return body.tagSet ?? [];
+}
+
+// putObjectTagging replaces the object's full tag set.
+export async function putObjectTagging(
+  s: Session,
+  bucket: string,
+  key: string,
+  tags: ObjectTag[],
+): Promise<void> {
+  const res = await fetch(
+    `/api/s3/${encodeURIComponent(bucket)}/${encPath(key.split('/'))}?tagging`,
+    {
+      method: 'PUT',
+      headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tagSet: tags }),
+    },
+  );
+  if (!res.ok) await throwHTTP(res);
+}
+
 export async function deleteBucketCORS(s: Session, bucket: string): Promise<void> {
   const res = await fetch(`/api/s3/${encodeURIComponent(bucket)}?cors`, {
     method: 'DELETE',
