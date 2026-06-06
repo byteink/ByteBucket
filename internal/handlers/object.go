@@ -115,9 +115,37 @@ func finalizeObjectWrite(bucketName, dstPath string, src io.Reader, meta map[str
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", 0, err
 	}
-	tmp, err := os.CreateTemp(dir, ".upload-*")
+
+	etag, crc32b64, written, err := streamToObject(dir, dstPath, src)
 	if err != nil {
 		return "", 0, err
+	}
+
+	meta["x-amz-checksum-crc32"] = crc32b64
+	meta[etagMetaKey] = etag
+	meta["Content-Length"] = strconv.FormatInt(written, 10)
+
+	metadataJSON, err := json.Marshal(meta)
+	if err != nil {
+		return "", 0, err
+	}
+	if err := os.WriteFile(dstPath+".meta", metadataJSON, 0644); err != nil {
+		return "", 0, err
+	}
+
+	// Best-effort gauge delta — a trendline, not an authoritative size report.
+	middleware.ObjectsBytesTotal.WithLabelValues(bucketName).Add(float64(written))
+	return etag, written, nil
+}
+
+// streamToObject writes src to a temp file in dir, computing the S3 ETag and
+// CRC32 in a single pass, optionally fsyncs the data, then atomically renames
+// it into dstPath (and fsyncs dir when durable). Returns the ETag, the base64
+// CRC32, and the byte count.
+func streamToObject(dir, dstPath string, src io.Reader) (string, string, int64, error) {
+	tmp, err := os.CreateTemp(dir, ".upload-*")
+	if err != nil {
+		return "", "", 0, err
 	}
 	tmpName := tmp.Name()
 	committed := false
@@ -134,39 +162,56 @@ func finalizeObjectWrite(bucketName, dstPath string, src io.Reader, meta map[str
 	written, err := io.Copy(io.MultiWriter(tmp, crcHasher, md5Hasher), src)
 	if err != nil {
 		_ = tmp.Close()
-		return "", 0, err
+		return "", "", 0, err
+	}
+	// Flush data to stable storage before the rename when durability is on, so
+	// an acknowledged write survives power loss; skipped when the operator has
+	// traded durability for throughput.
+	durable := syncWritesEnabled()
+	if durable {
+		if err := tmp.Sync(); err != nil {
+			_ = tmp.Close()
+			return "", "", 0, err
+		}
 	}
 	// Match the 0644 an os.Create would have produced; CreateTemp uses 0600.
 	if err := tmp.Chmod(0644); err != nil {
 		_ = tmp.Close()
-		return "", 0, err
+		return "", "", 0, err
 	}
 	if err := tmp.Close(); err != nil {
-		return "", 0, err
+		return "", "", 0, err
 	}
 	if err := os.Rename(tmpName, dstPath); err != nil {
-		return "", 0, err
+		return "", "", 0, err
 	}
 	committed = true
 
+	// fsync the parent directory so the rename itself is durable: without it a
+	// crash can lose the directory entry even though the file data was synced.
+	if durable {
+		if err := fsyncDir(dir); err != nil {
+			return "", "", 0, err
+		}
+	}
+
 	checksumBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(checksumBytes, crcHasher.Sum32())
-	etag := formatETag(md5Hasher)
-	meta["x-amz-checksum-crc32"] = base64.StdEncoding.EncodeToString(checksumBytes)
-	meta[etagMetaKey] = etag
-	meta["Content-Length"] = strconv.FormatInt(written, 10)
+	return formatETag(md5Hasher), base64.StdEncoding.EncodeToString(checksumBytes), written, nil
+}
 
-	metadataJSON, err := json.Marshal(meta)
+// fsyncDir flushes a directory entry to stable storage so a rename into it is
+// durable across a crash.
+func fsyncDir(dir string) error {
+	d, err := os.Open(dir)
 	if err != nil {
-		return "", 0, err
+		return err
 	}
-	if err := os.WriteFile(dstPath+".meta", metadataJSON, 0644); err != nil {
-		return "", 0, err
+	if err := d.Sync(); err != nil {
+		_ = d.Close()
+		return err
 	}
-
-	// Best-effort gauge delta — a trendline, not an authoritative size report.
-	middleware.ObjectsBytesTotal.WithLabelValues(bucketName).Add(float64(written))
-	return etag, written, nil
+	return d.Close()
 }
 
 // DownloadObjectHandler serves an object (file) from the specified bucket.

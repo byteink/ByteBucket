@@ -237,6 +237,16 @@ func run(ctx context.Context) error {
 	// the operator sees "localhost" until they configure a real origin.
 	handlers.SetPublicBaseURL(os.Getenv("PUBLIC_BASE_URL"))
 
+	// Object-write durability defaults ON: a PUT/Copy is fsync'd before the
+	// response returns. SYNC_WRITES=false trades that for throughput. A persisted
+	// runtime override (admin settings UI) wins and survives restarts.
+	handlers.SetSyncWrites(parseBoolEnvDefault("SYNC_WRITES", true))
+	syncEff, err := handlers.InitSyncWritesFromStore()
+	if err != nil {
+		return err
+	}
+	slog.Info("object write durability", "fsync", syncEff)
+
 	// Request rate limiting is opt-in and OFF by default; the environment
 	// seeds a baseline (see loadRateLimitConfig for the env contract). The
 	// controller is shared by both surfaces and is always installed — disabled
@@ -291,6 +301,21 @@ func parseBoolEnv(key string) bool {
 	v, err := strconv.ParseBool(strings.TrimSpace(os.Getenv(key)))
 	if err != nil {
 		return false
+	}
+	return v
+}
+
+// parseBoolEnvDefault reads a boolean env var, returning def when the value is
+// empty or malformed. Used for opt-OUT flags (default on) where absence must
+// not read as false, unlike parseBoolEnv's deny-by-default opt-IN semantics.
+func parseBoolEnvDefault(key string, def bool) bool {
+	s := strings.TrimSpace(os.Getenv(key))
+	if s == "" {
+		return def
+	}
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return def
 	}
 	return v
 }

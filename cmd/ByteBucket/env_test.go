@@ -16,6 +16,27 @@ func TestParseBoolEnv(t *testing.T) {
 	}
 }
 
+func TestParseBoolEnvDefault(t *testing.T) {
+	// Empty/malformed fall back to the supplied default (both directions).
+	t.Setenv("TEST_BOOLD", "")
+	if !parseBoolEnvDefault("TEST_BOOLD", true) {
+		t.Fatal("empty must return default true")
+	}
+	t.Setenv("TEST_BOOLD", "garbage")
+	if parseBoolEnvDefault("TEST_BOOLD", false) {
+		t.Fatal("malformed must return default false")
+	}
+	// An explicit value overrides the default.
+	t.Setenv("TEST_BOOLD", "false")
+	if parseBoolEnvDefault("TEST_BOOLD", true) {
+		t.Fatal("explicit false must override default true")
+	}
+	t.Setenv("TEST_BOOLD", "true")
+	if !parseBoolEnvDefault("TEST_BOOLD", false) {
+		t.Fatal("explicit true must override default false")
+	}
+}
+
 func TestParseFloatEnv(t *testing.T) {
 	cases := map[string]float64{"12.5": 12.5, "0": 0, "": 0, "abc": 0, "  3  ": 3}
 	for in, want := range cases {

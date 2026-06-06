@@ -64,12 +64,15 @@ Highest impact: these are the ops common clients call and currently fail on.
 
 ## Phase 2 — durability & safety (harden what exists)
 
-### 4. Atomic writes + fsync — PARTIAL (2026-06-06)
-- DONE: object bytes now written via temp file + rename in `finalizeObjectWrite`
-  (shared by upload + copy), so a crash mid-PUT no longer leaves a partial object.
-- TODO: `fsync` the temp file before rename, and fsync the parent dir after, for
-  true crash durability. The `.meta` sidecar is still written in place (not yet
-  temp+renamed).
+### 4. Atomic writes + fsync — DONE (2026-06-06)
+- Object bytes written via temp file + rename in `streamToObject` (shared by
+  upload + copy), so a crash mid-PUT never leaves a partial object.
+- fsync of the temp file before rename + fsync of the parent dir after, gated on
+  the durability setting. Configurable via SYNC_WRITES env (default on) and the
+  admin Settings UI (persisted override wins, survives restart). See durability.go.
+- REMAINING (minor): the `.meta` sidecar is still written in place, not fsync'd.
+  Object data + dir entry are durable; the sidecar is reconstructable (ETag
+  backfills on read), so this is acceptable. Revisit only if needed.
 
 ### 5. Concurrent-write safety
 - Per-object lock so two PUTs to the same key can't interleave object vs sidecar
@@ -137,5 +140,8 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   If-(Un)Modified-Since (304/412), PUT If-None-Match:*/If-Match (412). Explicit
   handling in conditional.go (gin's deferred WriteHeader swallows ServeContent's
   304). Fixed a stale Content-Length on short-circuit responses. Unit + E2E +
-  pentest (210 probes green). PHASE 1 COMPLETE. Next: Phase 2 durability (fsync)
-  or Phase A admin dashboard.
+  pentest (210 probes green). PHASE 1 COMPLETE.
+- 2026-06-06: Phase 2.4 atomic writes + fsync DONE — streamToObject (temp+rename),
+  fsync data+dir gated on SYNC_WRITES (default on) + admin Settings toggle
+  (persisted). New /api/config/sync endpoint + UI. Unit + E2E + pentest (215 green).
+  Next: Phase 2.5 concurrent-write lock.

@@ -118,6 +118,27 @@ export async function deleteRateLimit(s: Session): Promise<RateLimitConfig> {
   return ((await res.json()) as { effective: RateLimitConfig }).effective;
 }
 
+// Admin API subpath for the object-write durability (fsync) toggle (GET/PUT).
+const SYNC_WRITES_PATH = '/api/config/sync';
+
+// getSyncWrites returns the effective object-write durability setting.
+export async function getSyncWrites(s: Session): Promise<boolean> {
+  const res = await fetch(SYNC_WRITES_PATH, { headers: authHeaders(s) });
+  if (!res.ok) throw new Error(await parseError(res));
+  return ((await res.json()) as { enabled: boolean }).enabled;
+}
+
+// putSyncWrites sets and persists the durability setting, returning the new value.
+export async function putSyncWrites(s: Session, enabled: boolean): Promise<boolean> {
+  const res = await fetch(SYNC_WRITES_PATH, {
+    method: 'PUT',
+    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return ((await res.json()) as { enabled: boolean }).enabled;
+}
+
 // checkAdminAuth returns null when the current session is accepted by the admin
 // API, or a string describing the rejection.
 export async function checkAdminAuth(s: Session): Promise<string | null> {

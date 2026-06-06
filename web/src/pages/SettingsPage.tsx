@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import {
   deleteRateLimit,
   getRateLimit,
+  getSyncWrites,
   putRateLimit,
+  putSyncWrites,
   type RateLimitConfig,
   type RateLimitState,
 } from '../lib/admin';
@@ -16,6 +18,8 @@ export default function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [syncOn, setSyncOn] = useState<boolean | null>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
 
   useEffect(() => {
     if (!session) return;
@@ -25,9 +29,28 @@ export default function SettingsPage() {
         setForm(s.effective);
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    getSyncWrites(session)
+      .then(setSyncOn)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
     // session is read once from localStorage; refetching on its identity would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function onToggleSync(enabled: boolean) {
+    if (!session) return;
+    setError(null);
+    setNotice(null);
+    setSyncBusy(true);
+    try {
+      const now = await putSyncWrites(session, enabled);
+      setSyncOn(now);
+      setNotice(now ? 'Durable writes enabled (fsync on).' : 'Durable writes disabled (faster, less safe).');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncBusy(false);
+    }
+  }
 
   function patch(p: Partial<RateLimitConfig>) {
     setForm((f) => (f ? { ...f, ...p } : f));
@@ -136,6 +159,29 @@ export default function SettingsPage() {
               Reset to defaults
             </button>
           </div>
+        </div>
+      )}
+
+      <div className="mb-2 mt-8 flex items-baseline justify-between">
+        <h3 className="text-sm">Durability</h3>
+      </div>
+      {syncOn === null ? (
+        <p className="text-ink-500 text-sm">Loading.</p>
+      ) : (
+        <div className="border border-ink-200 p-4 max-w-md">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={syncOn}
+              disabled={syncBusy}
+              onChange={(e) => onToggleSync(e.target.checked)}
+            />
+            <span>Sync writes to disk (fsync)</span>
+          </label>
+          <p className="text-xs text-ink-500 mt-2">
+            On: each upload and copy is flushed to disk before the response returns, so an
+            acknowledged write survives power loss. Off: faster writes that may be lost on a crash.
+          </p>
         </div>
       )}
     </section>

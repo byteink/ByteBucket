@@ -13,6 +13,10 @@ import (
 // override, registered for GET/PUT/DELETE below.
 const rateLimitConfigPath = "/config/ratelimit"
 
+// syncWritesConfigPath is the admin API subpath for the object-write durability
+// (fsync) toggle, registered for GET/PUT below.
+const syncWritesConfigPath = "/config/sync"
+
 // NewAdminRouter initializes the routes for admin operations.
 //
 // The embedded admin SPA is served at / (and any unknown path) without auth;
@@ -71,6 +75,8 @@ func NewAdminRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 		api.GET(rateLimitConfigPath, handlers.GetRateLimitHandler)
 		api.PUT(rateLimitConfigPath, handlers.PutRateLimitHandler)
 		api.DELETE(rateLimitConfigPath, handlers.DeleteRateLimitHandler)
+		api.GET(syncWritesConfigPath, handlers.GetSyncWritesHandler)
+		api.PUT(syncWritesConfigPath, handlers.PutSyncWritesHandler)
 		api.POST("/users", handlers.CreateUserHandler)
 		api.GET("/users", handlers.ListUsersHandler)
 		api.PUT("/users/:accessKeyID", handlers.UpdateUserHandler)
