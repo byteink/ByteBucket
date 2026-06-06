@@ -146,6 +146,7 @@ Standard S3 surface. Any S3 client pointed at `http://<host>:9000` with `forcePa
 
 - **Buckets** — `PUT /:bucket`, `GET /`, `GET /:bucket` (list objects), `DELETE /:bucket`, `HEAD /:bucket`.
 - **Objects** — `PUT /:bucket/:key`, `GET /:bucket/:key`, `HEAD /:bucket/:key`, `DELETE /:bucket/:key`. `GET` honours the `Range:` header for partial / resumable downloads, returning `206 Partial Content` with `Content-Range`; `HEAD` and full `GET` advertise `Accept-Ranges: bytes`.
+- **Batch delete** — `POST /:bucket?delete` with a `<Delete>` document (up to 1000 keys; `<Quiet>` suppresses the per-key success entries). Each key is validated independently, so a traversal or sidecar-named key is reported as a per-key `<Error>` and never acted on; a key that does not exist deletes successfully (idempotent), matching AWS.
 - **Multipart upload** — `POST /:bucket/:key?uploads`, `PUT /:bucket/:key?partNumber=N&uploadId=X`, `POST /:bucket/:key?uploadId=X` (complete), `DELETE /:bucket/:key?uploadId=X` (abort), `GET /:bucket?uploads` (list uploads), `GET /:bucket/:key?uploadId=X` (list parts).
 - **Object tagging** — `PUT /:bucket/:key?tagging`, `GET /:bucket/:key?tagging`, `DELETE /:bucket/:key?tagging`. Up to 10 tags per object (key 1-128, value 0-256 UTF-8 chars, no duplicate keys). Tags are stored in a `.tags.json` sidecar independently of object data, so setting or removing them never changes the object's ETag.
 - **CORS** — `PUT /:bucket?cors`, `GET /:bucket?cors`, `DELETE /:bucket?cors`.
@@ -153,7 +154,7 @@ Standard S3 surface. Any S3 client pointed at `http://<host>:9000` with `forcePa
 
 ### Wire format
 
-XML in, XML out. Matches AWS S3 response shapes for `ListAllMyBucketsResult`, `ListBucketResult`, `CORSConfiguration`, `InitiateMultipartUploadResult`, `CompleteMultipartUploadResult`, and the standard `<Error>` body. ETags are the hex MD5 of object bytes, quoted. Multipart ETags are `<hex>-<partCount>`, matching S3's composite format.
+XML in, XML out. Matches AWS S3 response shapes for `ListAllMyBucketsResult`, `ListBucketResult`, `CORSConfiguration`, `InitiateMultipartUploadResult`, `CompleteMultipartUploadResult`, `DeleteResult`, and the standard `<Error>` body. ETags are the hex MD5 of object bytes, quoted. Multipart ETags are `<hex>-<partCount>`, matching S3's composite format.
 
 ### Example — put and get via `curl --aws-sigv4`
 

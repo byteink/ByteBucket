@@ -9,6 +9,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// bucketPath is the bucket-level route pattern shared by every verb.
+const bucketPath = "/:bucket"
+
+// methodNotAllowed is the default handler for verbs that only exist to carry a
+// subresource (e.g. POST /:bucket?delete); a bare request returns 405.
+func methodNotAllowed(c *gin.Context) { c.Status(http.StatusMethodNotAllowed) }
+
 // RegisterStorageRoutes binds the full S3-compatible storage surface onto the
 // given router group. It is mounted twice by the process:
 //   - at "/"       under the SigV4 middleware on port 9000 (S3 clients)
@@ -32,10 +39,13 @@ func RegisterStorageRoutes(g gin.IRouter) {
 	// per-bucket CORS subresource handlers when "?cors" is present; this
 	// preserves the S3 wire shape where subresources live on the query
 	// string rather than as distinct path segments.
-	g.PUT("/:bucket", v, dispatchBucketSubresource(handlers.CreateBucketHandler, http.MethodPut))
-	g.GET("/:bucket", v, dispatchBucketSubresource(handlers.ListObjectsHandler, http.MethodGet))
-	g.DELETE("/:bucket", v, dispatchBucketSubresource(handlers.DeleteBucketHandler, http.MethodDelete))
-	g.HEAD("/:bucket", v, handlers.HeadBucketHandler)
+	g.PUT(bucketPath, v, dispatchBucketSubresource(handlers.CreateBucketHandler, http.MethodPut))
+	g.GET(bucketPath, v, dispatchBucketSubresource(handlers.ListObjectsHandler, http.MethodGet))
+	g.DELETE(bucketPath, v, dispatchBucketSubresource(handlers.DeleteBucketHandler, http.MethodDelete))
+	// POST /:bucket exists only for the ?delete batch subresource; any other
+	// bucket-level POST is unsupported and the default handler returns 405.
+	g.POST(bucketPath, v, dispatchBucketSubresource(methodNotAllowed, http.MethodPost))
+	g.HEAD(bucketPath, v, handlers.HeadBucketHandler)
 
 	// Object-level operations. Because Gin's routing does not split on "/"
 	// for wildcard paths, an empty object key (trailing slash on /:bucket/)
@@ -143,18 +153,25 @@ func dispatchObjectPOST(c *gin.Context) {
 // are recognised; ?acl, ?policy, ?lifecycle, etc. fall through to the
 // default handler. Adding a new subresource means one more case here,
 // nothing else.
+// dispatchBucketCORS routes a ?cors request to the verb-specific handler.
+// Split out so dispatchBucketSubresource stays a flat list of subresource
+// guards rather than nesting a method switch inside each one.
+func dispatchBucketCORS(c *gin.Context, method string) {
+	switch method {
+	case http.MethodPut:
+		handlers.PutBucketCORSHandler(c)
+	case http.MethodGet:
+		handlers.GetBucketCORSHandler(c)
+	case http.MethodDelete:
+		handlers.DeleteBucketCORSHandler(c)
+	}
+}
+
 func dispatchBucketSubresource(defaultHandler gin.HandlerFunc, method string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		q := c.Request.URL.Query()
 		if _, ok := q["cors"]; ok {
-			switch method {
-			case http.MethodPut:
-				handlers.PutBucketCORSHandler(c)
-			case http.MethodGet:
-				handlers.GetBucketCORSHandler(c)
-			case http.MethodDelete:
-				handlers.DeleteBucketCORSHandler(c)
-			}
+			dispatchBucketCORS(c, method)
 			return
 		}
 		if _, ok := q["acl"]; ok {
@@ -168,6 +185,10 @@ func dispatchBucketSubresource(defaultHandler gin.HandlerFunc, method string) gi
 		}
 		if _, ok := q["uploads"]; ok && method == http.MethodGet {
 			handlers.ListMultipartUploadsHandler(c)
+			return
+		}
+		if _, ok := q["delete"]; ok && method == http.MethodPost {
+			handlers.DeleteObjectsHandler(c)
 			return
 		}
 		defaultHandler(c)

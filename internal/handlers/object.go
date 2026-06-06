@@ -331,23 +331,32 @@ func classifyOffsetRange(startStr, endStr string, size int64) rangeClass {
 // DeleteObjectHandler deletes an object (file) from the specified bucket.
 func DeleteObjectHandler(c *gin.Context) {
 	bucketName := c.Param("bucket")
-	objectKey := c.Param("objectKey")
-	objectKey = filepath.Clean(objectKey)
+	objectKey := filepath.Clean(c.Param("objectKey"))
+	if err := removeObject(bucketName, objectKey); err != nil {
+		respondError(c, http.StatusInternalServerError, "InternalError", "Error deleting object")
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// removeObject deletes one object plus its metadata sidecar and collapses the
+// now-empty parent directories, keeping the per-bucket byte gauge symmetric
+// with UploadObjectHandler's Add. objectKey must already be cleaned/validated.
+// A missing object is not an error (delete is idempotent); only a real removal
+// failure is returned. Shared by single DeleteObject and batch DeleteObjects so
+// the gauge/sidecar/dir-collapse contract lives in exactly one place.
+func removeObject(bucketName, objectKey string) error {
 	filePath := filepath.Join(objectsRoot, bucketName, objectKey)
 
-	// Capture size before removal so the per-bucket byte gauge can be
-	// decremented symmetrically with UploadObjectHandler's Add. A Stat
-	// error (e.g. concurrent delete) is non-fatal — we simply skip the
-	// gauge update rather than fail the request.
+	// Capture size before removal so the gauge can be decremented. A Stat
+	// error (e.g. concurrent delete) is non-fatal — skip the gauge update.
 	var removedBytes int64
 	if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
 		removedBytes = info.Size()
 	}
 
-	err := os.Remove(filePath)
-	if err != nil && !os.IsNotExist(err) {
-		respondError(c, http.StatusInternalServerError, "InternalError", "Error deleting object")
-		return
+	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	if removedBytes > 0 {
 		middleware.ObjectsBytesTotal.WithLabelValues(bucketName).Sub(float64(removedBytes))
@@ -371,8 +380,7 @@ func DeleteObjectHandler(c *gin.Context) {
 		}
 		parentDir = filepath.Dir(parentDir)
 	}
-
-	c.Status(http.StatusNoContent)
+	return nil
 }
 
 // GetObjectMetadataHandler retrieves the metadata for an object.

@@ -37,7 +37,7 @@ E2E-covered set listed in `notes/testing-gaps.md`.
 
 Highest impact: these are the ops common clients call and currently fail on.
 
-### 1. DeleteObjects (batch) — START HERE
+### 1. DeleteObjects (batch) — DONE (2026-06-06)
 - Route: `POST /:bucket?delete`
 - Parse XML `<Delete><Object><Key>...</Key></Object>...</Delete>` body
 - Return `<DeleteResult>` with per-key `<Deleted>` / `<Error>` entries
@@ -46,7 +46,7 @@ Highest impact: these are the ops common clients call and currently fail on.
 - Wire in `dispatchBucketSubresource` (POST is new on bucket path — add `g.POST("/:bucket", ...)`)
 - Probe: hostile keys (traversal) rejected; valid batch delete works
 
-### 2. CopyObject
+### 2. CopyObject — NEXT
 - Route: `PUT /:bucket/*key` with `x-amz-copy-source` header present
 - Same source==dest = metadata-only replace (`x-amz-metadata-directive: REPLACE`)
 - Copy object bytes + `.meta` sidecar; recompute ETag
@@ -118,4 +118,8 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   Added Phase 0 (close gaps) as a hard blocker before Phase 1. Next up: Encrypt/Decrypt tests.
 - 2026-06-06: Added Phase A (admin panel, parallel track). First: A1 Dashboard overview.
 - 2026-06-06: Phase 0 DONE — all 5 gaps closed (crypto, rand, GetObjectACL, config,
-  cmd env). util 0->87.5%, cmd 27.6->49.3%, storage 60.5->65.5%. Next: Phase 1 DeleteObjects.
+  cmd env). util 0->87.5%, cmd 27.6->49.3%, storage 60.5->65.5%.
+- 2026-06-06: Phase 1.1 DeleteObjects DONE — POST /:bucket?delete, XML+JSON, per-key
+  validation (traversal/sidecar -> per-key Error), 1000-key cap. Shared removeObject
+  helper (refactored out of DeleteObjectHandler). Unit tests + AWS-SDK E2E + pentest
+  group (194 probes green). Next: Phase 1.2 CopyObject.
