@@ -203,6 +203,58 @@ func TestPutObjectACL_NoSuchKey(t *testing.T) {
 	}
 }
 
+func TestGetObjectACL_DefaultsPrivateThenReflectsOverride(t *testing.T) {
+	dir := seedACLBucket(t, "b1")
+	if err := os.WriteFile(filepath.Join(dir, "b1", "k"), []byte("body"), 0644); err != nil {
+		t.Fatalf("write object: %v", err)
+	}
+	r := newACLTestEngine()
+
+	get := func() string {
+		req := httptest.NewRequest(http.MethodGet, "/b1/k?acl", nil)
+		req.Header.Set("Accept", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("get: %d body=%s", w.Code, w.Body.String())
+		}
+		var body struct {
+			Canned string `json:"canned"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return body.Canned
+	}
+
+	if got := get(); got != storage.ACLPrivate {
+		t.Fatalf("default canned=%q want private", got)
+	}
+
+	if err := storage.SetObjectACL(filepath.Join(dir, "b1", "k"), storage.ACLPublicRead); err != nil {
+		t.Fatalf("set object acl: %v", err)
+	}
+	if got := get(); got != storage.ACLPublicRead {
+		t.Fatalf("after override canned=%q want public-read", got)
+	}
+}
+
+func TestGetObjectACL_NoSuchKey(t *testing.T) {
+	seedACLBucket(t, "b1")
+
+	r := newACLTestEngine()
+	req := httptest.NewRequest(http.MethodGet, "/b1/missing?acl", nil)
+	req.Header.Set("Accept", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "NoSuchKey") {
+		t.Fatalf("expected NoSuchKey, got %s", w.Body.String())
+	}
+}
+
 func TestUploadObjectHonoursCannedACLHeader(t *testing.T) {
 	dir := seedACLBucket(t, "b1")
 

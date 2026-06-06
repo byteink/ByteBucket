@@ -83,9 +83,59 @@ Two canned values only: `private` and `public-read`. Resolution precedence: obje
 - `go vet ./...` and `go test -count=1 ./...` must be green before every commit.
 - **Every feature that adds or changes an attacker-reachable surface must add at least one probe to `scripts/pentest/probes.sh` before merge.** That includes new HTTP routes, new subresources (`?something`), new auth or ACL paths, and any change that touches name validation or sidecar handling. The probe asserts both the negative case (hostile input → 4xx) and a positive regression case (good input still works). `make pentest` must be green; the release preflight gates on it. See `scripts/pentest/README.md` for the patterns to imitate.
 
+## Testing policy (mandatory, non-negotiable)
+
+This project runs in production. Every change follows strict red/green/refactor TDD.
+No code is written before a failing test exists for it. No exceptions.
+
+**The cycle, every time:**
+
+1. **Red** — write the test first. Run it. Watch it fail for the right reason (the
+   behavior is missing, not a typo or compile error). A test that has never been
+   seen to fail proves nothing.
+2. **Green** — write the least code that makes it pass.
+3. **Refactor** — clean up with the test still green.
+
+**Coverage requirement — every bit of the app:**
+
+- Every new function, branch, and error path gets a unit test. Happy path AND every
+  unhappy path (bad input, missing resource, auth failure, malformed body).
+- Every feature that changes an attacker-reachable surface (new route, subresource,
+  auth/ACL path, name-validation or sidecar change) ALSO gets an E2E test in `tests/`
+  that drives the real containerized binary over HTTP, plus the `probes.sh` entry
+  already required below. Unit-level proof is not sufficient for these — the wire
+  format, routing, and middleware chain must be exercised end to end.
+- Both surfaces (`:9000` SigV4 and `:9001` admin) must be covered where a handler
+  serves both. Use `tests/cross_surface_parity_test.go` as the pattern.
+- Security-critical code (encryption, key/secret generation, signature verification,
+  ACL resolution, path validation) requires tamper/negative tests, not just round-trips.
+
+**Gates before every commit:**
+
+- `go vet ./...` green.
+- `CGO_ENABLED=0 go test -count=1 ./...` green (unit + E2E; E2E needs Docker).
+- `make pentest` green when an attacker-reachable surface changed.
+- Coverage must not regress. Check with
+  `CGO_ENABLED=0 go test -count=1 -coverprofile=/tmp/cov.out ./internal/... ./cmd/...`
+  then `go tool cover -func=/tmp/cov.out`. New code starts at full coverage; do not
+  add a function with a zero-coverage branch.
+
+Known untested spots being closed out are tracked in `notes/testing-gaps.md` — do not
+add to that list, shrink it.
+
 ## Release flow
 
 Tags drive releases. The `/release` slash command (`.claude/commands/release.md`) automates preflight (clean tree, up-to-date with origin/main, full test suite green) and pushes the tag. The `.github/workflows/release.yml` workflow builds multi-arch images on native runners (no QEMU), publishes to `ghcr.io/byteink/bytebucket`, and creates a GitHub Release. Pre-release tags (`vX.Y.Z-rc.N`) are excluded from the `latest` rotation automatically. Never force-push a tag; bump to the next version instead.
+
+## notes/ (dev scratch space)
+
+`notes/` at the repo root is a working area for development — scratchpads, dev
+docs, design ideas, references, roadmaps, anything useful while building. It is
+**not** user-facing documentation (that lives in `README.md` and code comments).
+Treat it as the place to drop and look up working context across sessions.
+
+- `notes/roadmap.md` — living plan for what to build next; update its status log as items land.
+- Add freely: one file per topic, kebab-case names. No required format.
 
 ## Where to look first
 
