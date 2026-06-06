@@ -54,11 +54,13 @@ Highest impact: these are the ops common clients call and currently fail on.
 - Enables rename/move flows
 - Probe: copy-source traversal rejected; valid copy works
 
-### 3. Conditional requests — NEXT
+### 3. Conditional requests — DONE (2026-06-06)
 - `If-Match` / `If-None-Match` / `If-Modified-Since` / `If-Unmodified-Since`
 - GET: `304 Not Modified` / `412 Precondition Failed`
-- PUT: `412` on mismatch (optimistic concurrency)
-- Cheap, pure correctness win
+- PUT: `412` on mismatch (optimistic concurrency); If-None-Match:* = create-only
+- NOTE: handled explicitly, NOT via http.ServeContent — gin defers WriteHeader so
+  ServeContent's empty 304 was swallowed and surfaced as 200. See conditional.go.
+- Phase 1 (S3 compatibility) COMPLETE.
 
 ## Phase 2 — durability & safety (harden what exists)
 
@@ -130,5 +132,10 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   directive, validated copy-source (traversal/sidecar rejected), self-copy needs
   REPLACE. Refactored upload+copy onto a shared finalizeObjectWrite (temp+rename,
   which also delivers Phase 2.4 atomic writes partially). Caught+fixed a metadata
-  casing bug via TDD. Unit + AWS-SDK E2E + pentest (204 probes green). Next: Phase 1.3
-  conditional requests.
+  casing bug via TDD. Unit + AWS-SDK E2E + pentest (204 probes green).
+- 2026-06-06: Phase 1.3 conditional requests DONE — GET If-Match/If-None-Match/
+  If-(Un)Modified-Since (304/412), PUT If-None-Match:*/If-Match (412). Explicit
+  handling in conditional.go (gin's deferred WriteHeader swallows ServeContent's
+  304). Fixed a stale Content-Length on short-circuit responses. Unit + E2E +
+  pentest (210 probes green). PHASE 1 COMPLETE. Next: Phase 2 durability (fsync)
+  or Phase A admin dashboard.

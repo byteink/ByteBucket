@@ -45,6 +45,19 @@ func UploadObjectHandler(c *gin.Context) {
 	}
 
 	dstPath := filepath.Join(objectsRoot, bucketName, objectKey)
+
+	// Optimistic-concurrency preconditions: If-None-Match:* (create-only) and
+	// If-Match:<etag> (overwrite-only-if-unchanged) are evaluated against the
+	// current on-disk object before we commit any bytes.
+	if status, handled := evaluatePutConditional(c, dstPath); handled {
+		if status == http.StatusInternalServerError {
+			respondError(c, status, "InternalError", "Error resolving object ETag")
+		} else {
+			respondError(c, status, "PreconditionFailed", "At least one precondition failed")
+		}
+		return
+	}
+
 	etag, _, err := finalizeObjectWrite(bucketName, dstPath, c.Request.Body, metadata)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Error saving object")
@@ -201,8 +214,17 @@ func DownloadObjectHandler(c *gin.Context) {
 	// Drop the sidecar Content-Length: ServeContent recomputes it from the
 	// open file and, on a 206, must report the slice length — not the full
 	// object size that applyMetadataHeaders copied from the sidecar. Leaving
-	// it would emit a wrong Content-Length on partial reads.
+	// it would emit a wrong Content-Length on partial reads — and, critically,
+	// on a precondition short-circuit (304/412) it would advertise a body
+	// length the empty/error response never sends, hanging the client.
 	c.Writer.Header().Del("Content-Length")
+
+	// Honour read preconditions (If-Match/If-None-Match/If-(Un)Modified-Since)
+	// before streaming. This must precede the Range handling so a failed
+	// precondition wins over a range request, per RFC 7233.
+	if applyGetConditional(c, etag, info.ModTime()) {
+		return
+	}
 
 	// Pre-classify any Range header before handing the request to
 	// ServeContent. The stdlib parser is RFC-correct for satisfiable ranges
