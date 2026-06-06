@@ -1,6 +1,13 @@
 import { ChangeEvent, DragEvent, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { deleteObject, getObject, putObject, putObjectACL, type CannedACL } from '../lib/s3';
+import {
+  deleteObject,
+  deleteObjects,
+  getObject,
+  putObject,
+  putObjectACL,
+  type CannedACL,
+} from '../lib/s3';
 import { loadSession } from '../lib/session';
 import { useObjectListing, type ObjectRow } from '../lib/useObjectListing';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -15,6 +22,31 @@ export default function ObjectsPage() {
   const { rows, folders, bucketACL, error, loadingMore, hasMore, refresh, loadMore, setError } =
     useObjectListing(session, bucket, prefix);
   const [dragOver, setDragOver] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  function toggleSelected(key: string) {
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  async function onDeleteSelected() {
+    if (!session || !bucket || selected.size === 0) return;
+    if (!window.confirm(`Delete ${selected.size} selected object(s)?`)) return;
+    try {
+      const failures = await deleteObjects(session, bucket, Array.from(selected));
+      setSelected(new Set());
+      await refresh();
+      if (failures.length > 0) {
+        setError(`${failures.length} object(s) could not be deleted: ${failures.map((f) => f.key).join(', ')}`);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   function navigate(nextPrefix: string) {
     const next = new URLSearchParams(params);
@@ -164,6 +196,7 @@ export default function ObjectsPage() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left border-b border-ink-200 text-ink-500">
+              <th className="table-cell font-normal w-8"></th>
               <th className="table-cell font-normal">Name</th>
               <th className="table-cell font-normal w-24">Size</th>
               <th className="table-cell font-normal w-56">Modified</th>
@@ -174,6 +207,7 @@ export default function ObjectsPage() {
           <tbody>
             {folders.map((p) => (
               <tr key={p} className="border-b border-ink-100">
+                <td className="table-cell"></td>
                 <td className="table-cell font-mono text-xs break-all">
                   <button
                     type="button"
@@ -191,6 +225,14 @@ export default function ObjectsPage() {
             ))}
             {rows.map((o) => (
               <tr key={o.key} className="border-b border-ink-100">
+                <td className="table-cell">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${o.key}`}
+                    checked={selected.has(o.key)}
+                    onChange={() => toggleSelected(o.key)}
+                  />
+                </td>
                 <td className="table-cell font-mono text-xs break-all">
                   <Link
                     className="hover:underline"
@@ -224,6 +266,11 @@ export default function ObjectsPage() {
           </tbody>
         </table>
         <div className="mt-4 flex items-center gap-4 border-t border-ink-100 pt-3 text-xs text-ink-500">
+          {selected.size > 0 && (
+            <button type="button" className="btn-danger h-8 px-3 text-xs" onClick={() => void onDeleteSelected()}>
+              Delete selected ({selected.size})
+            </button>
+          )}
           <span>
             Showing {folders.length} folder{folders.length === 1 ? '' : 's'} and {rows.length} object
             {rows.length === 1 ? '' : 's'}

@@ -214,6 +214,23 @@ export async function getObject(s: Session, bucket: string, key: string): Promis
   return await res.blob();
 }
 
+// deleteObjects removes up to 1000 keys in one batch via POST ?delete. Returns
+// the keys that failed (with a reason) so the caller can surface partial errors.
+export async function deleteObjects(
+  s: Session,
+  bucket: string,
+  keys: string[],
+): Promise<{ key: string; message: string }[]> {
+  const res = await fetch(`/api/s3/${encodeURIComponent(bucket)}?delete`, {
+    method: 'POST',
+    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ objects: keys }),
+  });
+  if (!res.ok) await throwHTTP(res);
+  const body = (await res.json()) as { errors?: { key: string; message: string }[] };
+  return body.errors ?? [];
+}
+
 export async function deleteObject(s: Session, bucket: string, key: string): Promise<void> {
   const res = await fetch(`/api/s3/${encodeURIComponent(bucket)}/${encPath(key.split('/'))}`, {
     method: 'DELETE',
