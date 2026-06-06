@@ -74,9 +74,13 @@ Highest impact: these are the ops common clients call and currently fail on.
   Object data + dir entry are durable; the sidecar is reconstructable (ETag
   backfills on read), so this is acceptable. Revisit only if needed.
 
-### 5. Concurrent-write safety
-- Per-object lock so two PUTs to the same key can't interleave object vs sidecar
-- Prevents torn object/metadata pairs under concurrent load
+### 5. Concurrent-write safety — DONE (2026-06-06)
+- Striped per-object lock (256 stripes, bounded memory) in locks.go, keyed by
+  on-disk path. Shared by finalizeObjectWrite + removeObject so a PUT/PUT or
+  PUT/DELETE on the same key can't interleave object rename vs sidecar write.
+- TDD: a concurrency test asserting "meta ETag == md5(object bytes)" failed
+  before the lock (torn pairs) and passes after.
+- Phase 2 (durability & safety) COMPLETE.
 
 ## Phase A — admin panel (parallel track, ships independently of S3 phases)
 
@@ -144,4 +148,6 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
 - 2026-06-06: Phase 2.4 atomic writes + fsync DONE — streamToObject (temp+rename),
   fsync data+dir gated on SYNC_WRITES (default on) + admin Settings toggle
   (persisted). New /api/config/sync endpoint + UI. Unit + E2E + pentest (215 green).
-  Next: Phase 2.5 concurrent-write lock.
+- 2026-06-06: Phase 2.5 concurrent-write safety DONE — striped per-object lock
+  (locks.go) shared by write+delete. TDD torn-write test (red before, green after).
+  PHASE 2 COMPLETE. Next: Phase A admin panel (A1 dashboard) / Phase 3 (versioning).

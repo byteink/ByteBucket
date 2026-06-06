@@ -111,6 +111,10 @@ func contentTypeOrOctet(c *gin.Context) string {
 // destination cannot truncate its own input mid-read. meta must already carry
 // Content-Type and any acl entry. Returns the ETag and bytes written.
 func finalizeObjectWrite(bucketName, dstPath string, src io.Reader, meta map[string]string) (string, int64, error) {
+	// Serialize with any concurrent write/delete of the same key so the object
+	// file and its .meta sidecar are committed as a consistent pair.
+	defer lockObjectPath(dstPath)()
+
 	dir := filepath.Dir(dstPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", 0, err
@@ -434,6 +438,9 @@ func DeleteObjectHandler(c *gin.Context) {
 // the gauge/sidecar/dir-collapse contract lives in exactly one place.
 func removeObject(bucketName, objectKey string) error {
 	filePath := filepath.Join(objectsRoot, bucketName, objectKey)
+	// Same stripe lock as finalizeObjectWrite so a delete cannot land between a
+	// concurrent write's object rename and its sidecar write.
+	defer lockObjectPath(filePath)()
 
 	// Capture size before removal so the gauge can be decremented. A Stat
 	// error (e.g. concurrent delete) is non-fatal — skip the gauge update.
