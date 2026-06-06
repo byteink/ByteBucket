@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -143,4 +144,21 @@ func Metrics() gin.HandlerFunc {
 // instance across tests that reset the registry.
 func PrometheusHandler() http.Handler {
 	return promhttp.Handler()
+}
+
+// TotalRequests returns the cumulative count across every label combination of
+// the HTTP request counter. Used by the admin stats summary so the dashboard
+// can show a request total without scraping and parsing the Prometheus text.
+func TotalRequests() float64 {
+	ch := make(chan prometheus.Metric, 1024)
+	httpRequestsTotal.Collect(ch)
+	close(ch)
+	var sum float64
+	var m dto.Metric
+	for metric := range ch {
+		if err := metric.Write(&m); err == nil && m.Counter != nil {
+			sum += m.Counter.GetValue()
+		}
+	}
+	return sum
 }

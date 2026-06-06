@@ -3,6 +3,7 @@ import { clearSession, loadSession } from '../lib/session';
 import ThemeToggle from './ThemeToggle';
 
 const navItems = [
+  { to: '/dashboard', label: 'Dashboard' },
   { to: '/buckets', label: 'Buckets' },
   { to: '/users', label: 'Users' },
   { to: '/settings', label: 'Settings' },

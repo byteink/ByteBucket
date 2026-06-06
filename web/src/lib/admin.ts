@@ -118,6 +118,20 @@ export async function deleteRateLimit(s: Session): Promise<RateLimitConfig> {
   return ((await res.json()) as { effective: RateLimitConfig }).effective;
 }
 
+// Stats is the admin dashboard summary returned by GET /api/stats.
+export interface Stats {
+  buckets: number;
+  objects: number;
+  bytes: number;
+  requests: number;
+}
+
+export async function getStats(s: Session): Promise<Stats> {
+  const res = await fetch('/api/stats', { headers: authHeaders(s) });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as Stats;
+}
+
 // Admin API subpath for the object-write durability (fsync) toggle (GET/PUT).
 const SYNC_WRITES_PATH = '/api/config/sync';
 

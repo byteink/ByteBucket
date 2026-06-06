@@ -88,7 +88,7 @@ Web UI features. Each = React page/component + any admin API + tests (unit for h
 component test, and an E2E in `tests/` driving the real binary per the testing policy).
 Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settings.
 
-### A1. Dashboard overview — START HERE
+### A1. Dashboard overview — DONE (2026-06-07)
 - New landing page: bucket count, object count, total storage bytes, request metrics.
 - Read-only, low risk. Data sources:
   - `/metrics` (Prometheus) is already exposed — parse counters for request stats, OR
@@ -100,7 +100,7 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   (bucket/object/byte counts via bounded store walk) + `/metrics` for request-rate
   charts.
 
-### A2. Object tagging editor (in ObjectDetail) — `?tagging` API already exists.
+### A2. Object tagging editor (in ObjectDetail) — NEXT. `?tagging` API already exists.
 ### A3. Bucket ACL toggle (private <-> public-read) — `?acl` already exists.
 ### A4. Presigned link button (in ObjectDetail) — `?presign` already exists.
 ### A5. Audit log viewer — ACL-change audit already recorded (`AuditACLChange`); add read-only trail.
@@ -150,4 +150,7 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   (persisted). New /api/config/sync endpoint + UI. Unit + E2E + pentest (215 green).
 - 2026-06-06: Phase 2.5 concurrent-write safety DONE — striped per-object lock
   (locks.go) shared by write+delete. TDD torn-write test (red before, green after).
-  PHASE 2 COMPLETE. Next: Phase A admin panel (A1 dashboard) / Phase 3 (versioning).
+  PHASE 2 COMPLETE.
+- 2026-06-07: Phase A1 dashboard DONE — GET /api/stats (bucket/object/byte totals
+  via bounded store walk + cumulative request count from metrics registry) + React
+  DashboardPage + nav. Unit + E2E + pentest (220 green). Next: A2 tagging editor.
