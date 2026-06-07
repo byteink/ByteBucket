@@ -199,6 +199,26 @@ export async function getRequestSeries(
   return (await res.json()) as RequestSeries;
 }
 
+// AuditEvent is one recorded control-plane mutation.
+export interface AuditEvent {
+  ts: number; // unix nano; pagination cursor
+  time: string; // RFC3339
+  actor: string;
+  action: string;
+  target: string;
+  detail: string;
+}
+
+// getAudit returns recent audit events newest-first. Pass `before` (the ts of
+// the oldest event already shown) to page into older entries.
+export async function getAudit(s: Session, limit = 50, before?: number): Promise<AuditEvent[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (before) params.set('before', String(before));
+  const res = await fetch(`/api/audit?${params.toString()}`, { headers: authHeaders(s) });
+  if (!res.ok) throw new Error(await parseError(res));
+  return ((await res.json()) as { events: AuditEvent[] }).events ?? [];
+}
+
 // Admin API subpath for the request-sample retention setting (GET/PUT).
 const RETENTION_PATH = '/api/config/retention';
 

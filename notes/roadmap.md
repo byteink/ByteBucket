@@ -189,3 +189,15 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   now have htmlFor/id). Full Go suite + 11 browser tests green.
   REMAINING (unchanged): A5 audit viewer, A6 visual ACL matrix, Phase 3 versioning.
   Possible follow-up: wire `make e2e-web` into CI (needs Docker + browser in runner).
+- 2026-06-07: CI DONE — .github/workflows/ci.yml runs three parallel jobs on
+  push/PR to main: go-tests (make vet + make test), pentest (make pentest),
+  browser-e2e (make e2e-web). actionlint-clean.
+- 2026-06-07: A5 audit log viewer DONE — control-plane audit trail. Storage:
+  BoltDB AuditLog (nano+seq keys, count-capped 10k). recordAudit() best-effort,
+  actor from context; wired into user CRUD + sync/retention/ratelimit setters.
+  Admin GET /api/audit (newest-first, limit clamp, ?before cursor). AuditPage +
+  nav + load-more pagination. Unit + Go E2E + pentest (237) + browser E2E (12).
+  SCOPE NOTE: audits the admin control-plane (user + config), NOT every object
+  PUT/DELETE (that is the dashboard activity/metrics story). Object-level audit
+  is a possible future extension.
+  REMAINING: A6 visual ACL matrix, Phase 3 versioning.
