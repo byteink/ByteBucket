@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import {
   deleteRateLimit,
   getRateLimit,
+  getRetention,
   getSyncWrites,
   putRateLimit,
+  putRetention,
   putSyncWrites,
   type RateLimitConfig,
   type RateLimitState,
@@ -20,6 +22,8 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [syncOn, setSyncOn] = useState<boolean | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
+  const [retentionDays, setRetentionDays] = useState<number | null>(null);
+  const [retentionBusy, setRetentionBusy] = useState(false);
 
   useEffect(() => {
     if (!session) return;
@@ -32,9 +36,28 @@ export default function SettingsPage() {
     getSyncWrites(session)
       .then(setSyncOn)
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    getRetention(session)
+      .then(setRetentionDays)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
     // session is read once from localStorage; refetching on its identity would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function onSaveRetention(days: number) {
+    if (!session) return;
+    setError(null);
+    setNotice(null);
+    setRetentionBusy(true);
+    try {
+      const saved = await putRetention(session, days);
+      setRetentionDays(saved);
+      setNotice(`Request history retained for ${saved} days.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRetentionBusy(false);
+    }
+  }
 
   async function onToggleSync(enabled: boolean) {
     if (!session) return;
@@ -184,7 +207,56 @@ export default function SettingsPage() {
           </p>
         </div>
       )}
+
+      <div className="mb-2 mt-8 flex items-baseline justify-between">
+        <h3 className="text-sm">Metrics retention</h3>
+      </div>
+      {retentionDays === null ? (
+        <p className="text-ink-500 text-sm">Loading.</p>
+      ) : (
+        <div className="border border-ink-200 p-4 max-w-md">
+          <RetentionField days={retentionDays} busy={retentionBusy} onSave={onSaveRetention} />
+          <p className="text-xs text-ink-500 mt-2">
+            How long the dashboard keeps per-minute request-outcome history for the 2xx/4xx/5xx
+            chart. Older samples are pruned. Range 1–365 days.
+          </p>
+        </div>
+      )}
     </section>
+  );
+}
+
+function RetentionField({
+  days,
+  busy,
+  onSave,
+}: Readonly<{ days: number; busy: boolean; onSave: (days: number) => void }>) {
+  const [value, setValue] = useState(days);
+  return (
+    <div className="flex items-end gap-2">
+      <div className="flex-1">
+        <label className="field-label">Retention (days)</label>
+        <input
+          type="number"
+          className="input"
+          value={value}
+          step="1"
+          min={1}
+          max={365}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            setValue(Number.isFinite(v) ? Math.trunc(v) : days);
+          }}
+        />
+      </div>
+      <button
+        className="btn-primary h-9 px-3 text-xs"
+        disabled={busy || value === days}
+        onClick={() => onSave(value)}
+      >
+        {busy ? 'Saving' : 'Save'}
+      </button>
+    </div>
   );
 }
 

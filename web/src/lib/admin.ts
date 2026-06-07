@@ -163,6 +163,63 @@ export async function getStats(s: Session): Promise<Stats> {
   return (await res.json()) as Stats;
 }
 
+// RequestBucket is one time bucket of S3 request outcomes by status class.
+export interface RequestBucket {
+  ts: number; // bucket start, unix seconds
+  c2xx: number;
+  c4xx: number;
+  c5xx: number;
+}
+
+// RequestSeries is a navigable, bucketed window of request-outcome history.
+export interface RequestSeries {
+  range: string;
+  offset: number;
+  from: number;
+  to: number;
+  bucketSeconds: number;
+  canBack: boolean;
+  canForward: boolean;
+  totals: { c2xx: number; c4xx: number; c5xx: number };
+  buckets: RequestBucket[];
+}
+
+// The windows the dashboard chart can select between.
+export type RequestRange = '1h' | '24h' | '7d' | '14d' | '30d';
+
+export async function getRequestSeries(
+  s: Session,
+  range: RequestRange,
+  offset: number,
+): Promise<RequestSeries> {
+  const res = await fetch(`/api/stats/requests?range=${range}&offset=${offset}`, {
+    headers: authHeaders(s),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as RequestSeries;
+}
+
+// Admin API subpath for the request-sample retention setting (GET/PUT).
+const RETENTION_PATH = '/api/config/retention';
+
+// getRetention returns the request-sample retention window in days.
+export async function getRetention(s: Session): Promise<number> {
+  const res = await fetch(RETENTION_PATH, { headers: authHeaders(s) });
+  if (!res.ok) throw new Error(await parseError(res));
+  return ((await res.json()) as { days: number }).days;
+}
+
+// putRetention sets and persists the retention window, returning the clamped value.
+export async function putRetention(s: Session, days: number): Promise<number> {
+  const res = await fetch(RETENTION_PATH, {
+    method: 'PUT',
+    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return ((await res.json()) as { days: number }).days;
+}
+
 // Admin API subpath for the object-write durability (fsync) toggle (GET/PUT).
 const SYNC_WRITES_PATH = '/api/config/sync';
 
