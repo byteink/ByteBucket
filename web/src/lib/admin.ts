@@ -124,6 +124,10 @@ export interface Stats {
   objects: number;
   bytes: number;
   requests: number;
+  statusClasses: Record<string, number>;
+  multipartInProgress: number;
+  p95LatencyMs: number;
+  topBuckets: { name: string; bytes: number }[];
 }
 
 export async function getStats(s: Session): Promise<Stats> {
