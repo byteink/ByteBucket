@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same branch/PR cancels the in-flight run — these jobs
+# build Docker images and are not cheap.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Vet + the full Go suite. `make test` runs unit tests and the testcontainers
+  # E2E in tests/, which build docker/Dockerfile and drive the real binary —
+  # Docker is preinstalled on ubuntu-latest. CGO_ENABLED=0 matches the shipped
+  # binary and sidesteps the go-m1cpu cgo crash (see the Makefile comment).
+  go-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet
+        run: make vet
+      - name: Unit + E2E
+        run: make test
+
+  # Black-box DAST: the same probe suite the release preflight gates on.
+  pentest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Pentest probes
+        run: make pentest
+
+  # Browser E2E drives the real admin UI in Chromium against a freshly-built
+  # container. Playwright's Linux browser system deps are installed with
+  # --with-deps here; make e2e-web's own `playwright install` is then a no-op.
+  browser-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install browser e2e deps
+        run: cd e2e && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium
+      - name: Browser E2E
+        run: make e2e-web
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 7
