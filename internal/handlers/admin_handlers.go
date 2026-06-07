@@ -45,6 +45,7 @@ func CreateUserHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Error creating user: %v", err)})
 		return
 	}
+	recordAudit(c, "user.create", user.AccessKeyID, "")
 
 	c.JSON(http.StatusCreated, gin.H{
 		"accessKeyID":     user.AccessKeyID,
@@ -80,6 +81,7 @@ func UpdateUserHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Error updating user: %v", err)})
 		return
 	}
+	recordAudit(c, "user.update", accessKeyID, "")
 	c.Status(http.StatusOK)
 }
 
@@ -108,6 +110,7 @@ func DeleteUserHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Error deleting user: %v", err)})
 		return
 	}
+	recordAudit(c, "user.delete", accessKeyID, "")
 	c.Status(http.StatusNoContent)
 }
 

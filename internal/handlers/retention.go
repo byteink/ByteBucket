@@ -87,5 +87,6 @@ func PutRetentionHandler(c *gin.Context) {
 		return
 	}
 	requestRetentionDays.Store(int64(days))
+	recordAudit(c, "config.retention", strconv.Itoa(days), "")
 	c.JSON(http.StatusOK, retentionDTO{Days: days})
 }

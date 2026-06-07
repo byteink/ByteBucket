@@ -78,6 +78,7 @@ func NewAdminRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 		api.GET("/config", handlers.GetConfigHandler)
 		api.GET("/stats", handlers.GetStatsHandler)
 		api.GET("/stats/requests", handlers.GetRequestSeriesHandler)
+		api.GET("/audit", handlers.GetAuditHandler)
 		api.GET(retentionConfigPath, handlers.GetRetentionHandler)
 		api.PUT(retentionConfigPath, handlers.PutRetentionHandler)
 		api.GET(rateLimitConfigPath, handlers.GetRateLimitHandler)

@@ -69,5 +69,6 @@ func PutSyncWritesHandler(c *gin.Context) {
 		return
 	}
 	syncWrites.Store(d.Enabled)
+	recordAudit(c, "config.sync", val, "")
 	c.JSON(http.StatusOK, syncWritesDTO{Enabled: d.Enabled})
 }

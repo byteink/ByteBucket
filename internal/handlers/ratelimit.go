@@ -143,6 +143,7 @@ func PutRateLimitHandler(c *gin.Context) {
 		return
 	}
 	rlController.Apply(d.toConfig())
+	recordAudit(c, "config.ratelimit.set", "", "")
 	c.JSON(http.StatusOK, gin.H{"effective": dtoFromConfig(rlController.Current())})
 }
 
@@ -154,6 +155,7 @@ func DeleteRateLimitHandler(c *gin.Context) {
 		return
 	}
 	rlController.Apply(rlEnv)
+	recordAudit(c, "config.ratelimit.clear", "", "")
 	c.JSON(http.StatusOK, gin.H{"effective": dtoFromConfig(rlController.Current())})
 }
 
