@@ -40,7 +40,7 @@ export default function Layout() {
             </nav>
           </div>
           <div className="flex items-center gap-3 text-xs text-ink-500">
-            <span className="font-mono truncate max-w-[12rem]" title={session?.accessKey}>
+            <span className="font-mono truncate max-w-48" title={session?.accessKey}>
               {session?.accessKey}
             </span>
             <ThemeToggle />
