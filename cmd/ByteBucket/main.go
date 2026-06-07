@@ -230,12 +230,13 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	// PUBLIC_BASE_URL is the public origin under which anonymous reads of
-	// public-read objects are served (e.g. https://bb.example.com). The
-	// admin UI uses it to render shareable links on the object detail page.
-	// Empty value is valid — the UI falls back to its current location and
-	// the operator sees "localhost" until they configure a real origin.
-	handlers.SetPublicBaseURL(os.Getenv("PUBLIC_BASE_URL"))
+	// PUBLIC_BASE_URL is the public origin under which the S3 storage surface
+	// is reachable (e.g. https://bb.example.com). It anchors both the admin
+	// UI's shareable links and server-minted presigned URLs. Unset, it
+	// defaults to the local storage port so presign and public links work out
+	// of the box on localhost; remapped ports or a TLS-terminating proxy need
+	// an explicit value.
+	handlers.SetPublicBaseURL(resolvePublicBaseURL())
 
 	// Object-write durability defaults ON: a PUT/Copy is fsync'd before the
 	// response returns. SYNC_WRITES=false trades that for throughput. A persisted
@@ -303,6 +304,21 @@ func parseBoolEnv(key string) bool {
 		return false
 	}
 	return v
+}
+
+// defaultPublicBaseURL is the origin presigned URLs and public links use when
+// PUBLIC_BASE_URL is unset. It points at the storage surface's default port so
+// a localhost deployment works without configuration.
+const defaultPublicBaseURL = "http://localhost:9000"
+
+// resolvePublicBaseURL returns the configured PUBLIC_BASE_URL, or the localhost
+// storage default when unset, so presign and public links never hard-fail on
+// an unconfigured local run.
+func resolvePublicBaseURL() string {
+	if v := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")); v != "" {
+		return v
+	}
+	return defaultPublicBaseURL
 }
 
 // parseBoolEnvDefault reads a boolean env var, returning def when the value is

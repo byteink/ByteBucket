@@ -88,6 +88,7 @@ All configuration is via environment variables.
 | `GIN_MODE` | no | `debug` | Set to `release` in production. The provided Docker image sets this. |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn`, `error`. |
 | `LOG_FORMAT` | no | `json` | `json` for production / log aggregators, `text` for local dev readability. |
+| `PUBLIC_BASE_URL` | no | `http://localhost:9000` | Public origin of the S3 storage surface. Anchors the admin UI's shareable links and server-minted presigned URLs. Defaults to the localhost storage port so presign and public links work out of the box; set it (e.g. `https://bb.example.com`) when ports are remapped or a proxy terminates TLS. |
 | `SYNC_WRITES` | no | `true` | Durable object writes: each upload/copy is `fsync`'d (data file + parent directory) before the response returns, so an acknowledged write survives power loss. Set `false` to trade durability for throughput. Toggleable at runtime in the admin Settings UI (a saved override persists and wins over this baseline). |
 | `RATE_LIMIT_ENABLED` | no | `false` | Master switch for per-client request rate limiting. Off by default; when disabled the middleware short-circuits after one atomic read, so the per-request cost is negligible. Seeds the baseline that a runtime override (see below) can replace. |
 | `RATE_LIMIT_RPS` | no | `0` | Sustained requests per second allowed per client IP (token refill rate). Only meaningful when limiting is enabled. |

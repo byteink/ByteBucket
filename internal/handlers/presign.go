@@ -66,10 +66,13 @@ func PresignObjectHandler(c *gin.Context) {
 		return
 	}
 
+	// base is normally populated — it defaults to the localhost storage origin
+	// when PUBLIC_BASE_URL is unset. This guards the degenerate case where an
+	// operator explicitly configured it empty.
 	base := presignBaseURL(c)
 	if base == "" {
 		respondError(c, http.StatusServiceUnavailable, "PresignUnavailable",
-			"Set PUBLIC_BASE_URL on the server to enable presigned URLs")
+			"Presigned URLs unavailable: server has no public base URL configured")
 		return
 	}
 

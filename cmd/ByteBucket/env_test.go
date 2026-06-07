@@ -16,6 +16,19 @@ func TestParseBoolEnv(t *testing.T) {
 	}
 }
 
+func TestResolvePublicBaseURL(t *testing.T) {
+	// An explicit value is used verbatim (trimmed).
+	t.Setenv("PUBLIC_BASE_URL", "  https://bb.example.com  ")
+	if got := resolvePublicBaseURL(); got != "https://bb.example.com" {
+		t.Fatalf("explicit: got %q", got)
+	}
+	// Unset falls back to the localhost storage default so presign works locally.
+	t.Setenv("PUBLIC_BASE_URL", "")
+	if got := resolvePublicBaseURL(); got != defaultPublicBaseURL {
+		t.Fatalf("unset: got %q want %q", got, defaultPublicBaseURL)
+	}
+}
+
 func TestParseBoolEnvDefault(t *testing.T) {
 	// Empty/malformed fall back to the supplied default (both directions).
 	t.Setenv("TEST_BOOLD", "")
