@@ -89,6 +89,15 @@ var (
 		Name: "bytebucket_s3_bytes_transferred_total",
 		Help: "Object payload bytes per bucket by direction (in=upload/copy, out=download).",
 	}, []string{"bucket", "direction"})
+
+	// s3RequestsTotal counts S3-surface responses by status class (2xx/3xx/
+	// 4xx/5xx). Recorded only for real object traffic (data-plane on :9000 and
+	// the admin /api/s3 group), never admin-management polling or SPA assets,
+	// so it is an honest request-health signal rather than UI noise.
+	s3RequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "bytebucket_s3_requests_total",
+		Help: "S3 object-API responses by status class (2xx, 3xx, 4xx, 5xx).",
+	}, []string{"class"})
 )
 
 func init() {
@@ -103,6 +112,7 @@ func init() {
 		ObjectsBytesTotal,
 		s3OperationsTotal,
 		s3BytesTransferredTotal,
+		s3RequestsTotal,
 	)
 	// Go runtime and process-level metrics (go_*, process_*) power every
 	// standard Prometheus dashboard. The default registry installs both

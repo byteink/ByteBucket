@@ -36,6 +36,9 @@ func TestE2E_Stats(t *testing.T) {
 		Activity struct {
 			Uploads float64 `json:"uploads"`
 		} `json:"activity"`
+		Requests struct {
+			Success float64 `json:"success"`
+		} `json:"requests"`
 		PerBucket []struct {
 			Name    string  `json:"name"`
 			Bytes   int64   `json:"bytes"`
@@ -53,6 +56,11 @@ func TestE2E_Stats(t *testing.T) {
 	// and against the seeded bucket's per-bucket row.
 	if s.Activity.Uploads < 1 {
 		t.Fatalf("expected total upload activity, got %+v", s.Activity)
+	}
+	// The successful bucket/object PUTs above flow through /api/s3, so the
+	// request-health rollup must show 2xx responses for real object traffic.
+	if s.Requests.Success < 1 {
+		t.Fatalf("expected 2xx request outcomes, got %+v", s.Requests)
 	}
 	var found bool
 	for _, b := range s.PerBucket {

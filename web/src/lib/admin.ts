@@ -127,6 +127,16 @@ export interface BucketActivity {
   bytesOut: number;
 }
 
+// RequestOutcomes is S3-surface request health: response counts by status
+// class. Admin polling and SPA assets are excluded, so this reflects real
+// object traffic only.
+export interface RequestOutcomes {
+  success: number;
+  redirect: number;
+  clientError: number;
+  serverError: number;
+}
+
 // BucketRow is one bucket's on-disk size plus its operation counters.
 export interface BucketRow {
   name: string;
@@ -143,6 +153,7 @@ export interface Stats {
   bytes: number;
   multipartInProgress: number;
   activity: BucketActivity;
+  requests: RequestOutcomes;
   perBucket: BucketRow[];
 }
 

@@ -65,6 +65,7 @@ export default function DashboardPage() {
           </div>
 
           <Activity stats={stats} />
+          <Requests stats={stats} />
           <PerBucket stats={stats} />
         </div>
       )}
@@ -89,6 +90,28 @@ function Activity({ stats }: Readonly<{ stats: Stats }>) {
           <div key={f.label}>
             <div className="text-xs text-ink-500">{f.label}</div>
             <div className="text-lg tabular-nums">{f.value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Requests({ stats }: Readonly<{ stats: Stats }>) {
+  const r = stats.requests;
+  const figures: ReadonlyArray<{ label: string; value: string; tone: string }> = [
+    { label: '2xx', value: formatCount(r.success), tone: 'text-ink-900' },
+    { label: '4xx', value: formatCount(r.clientError), tone: 'text-ink-900' },
+    { label: '5xx', value: formatCount(r.serverError), tone: r.serverError > 0 ? 'text-red-700' : 'text-ink-900' },
+  ];
+  return (
+    <div>
+      <h3 className="text-sm mb-2">Request outcomes (S3 API)</h3>
+      <div className="flex flex-wrap gap-x-10 gap-y-3">
+        {figures.map((f) => (
+          <div key={f.label}>
+            <div className="text-xs text-ink-500">{f.label}</div>
+            <div className={`text-lg tabular-nums ${f.tone}`}>{f.value}</div>
           </div>
         ))}
       </div>

@@ -35,9 +35,10 @@ type statsDTO struct {
 	Buckets             int64                    `json:"buckets"`
 	Objects             int64                    `json:"objects"`
 	Bytes               int64                    `json:"bytes"`
-	MultipartInProgress float64                  `json:"multipartInProgress"`
+	MultipartInProgress float64                   `json:"multipartInProgress"`
 	Activity            middleware.BucketActivity `json:"activity"`
-	PerBucket           []bucketRow              `json:"perBucket"`
+	Requests            middleware.RequestOutcomes `json:"requests"`
+	PerBucket           []bucketRow               `json:"perBucket"`
 }
 
 // GetStatsHandler returns the dashboard summary: storage footprint plus real
@@ -79,6 +80,7 @@ func GetStatsHandler(c *gin.Context) {
 		Bytes:               bytes,
 		MultipartInProgress: middleware.MultipartInProgress(),
 		Activity:            total,
+		Requests:            middleware.S3RequestOutcomes(),
 		PerBucket:           rows,
 	})
 }

@@ -1,6 +1,12 @@
 package middleware
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+)
 
 func TestS3ActivityByBucket_AggregatesOpsAndBytes(t *testing.T) {
 	// Unique bucket so the cumulative global registry can't bleed across tests.
@@ -28,6 +34,37 @@ func TestS3ActivityByBucket_AggregatesOpsAndBytes(t *testing.T) {
 	}
 	if got.BytesOut != 200 {
 		t.Fatalf("bytesOut = %v, want 200", got.BytesOut)
+	}
+}
+
+func TestS3RequestOutcome_CountsByClassAndSkipsHealth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(S3RequestOutcome())
+	r.GET("/ok", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/bad", func(c *gin.Context) { c.Status(http.StatusForbidden) })
+	r.GET("/boom", func(c *gin.Context) { c.Status(http.StatusInternalServerError) })
+	r.GET("/health", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	before := S3RequestOutcomes()
+	hit := func(p string) {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, p, nil))
+	}
+	hit("/ok")
+	hit("/bad")
+	hit("/boom")
+	hit("/health") // must be excluded from request-health accounting
+	after := S3RequestOutcomes()
+
+	if d := after.Success - before.Success; d != 1 {
+		t.Fatalf("2xx delta = %v, want 1 (health excluded)", d)
+	}
+	if d := after.ClientError - before.ClientError; d != 1 {
+		t.Fatalf("4xx delta = %v, want 1", d)
+	}
+	if d := after.ServerError - before.ServerError; d != 1 {
+		t.Fatalf("5xx delta = %v, want 1", d)
 	}
 }
 

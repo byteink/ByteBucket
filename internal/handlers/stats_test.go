@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"ByteBucket/internal/middleware"
+
 	"github.com/gin-gonic/gin"
 	"github.com/goccy/go-json"
 )
@@ -65,6 +67,31 @@ func TestStatsHandler_JSONShape(t *testing.T) {
 	}
 	if dto.Buckets != 1 || dto.Objects != 1 || dto.Bytes != 5 {
 		t.Fatalf("unexpected stats: %+v", dto)
+	}
+}
+
+func TestStatsHandler_IncludesS3RequestOutcomes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withTempObjectsRoot(t)
+
+	// Drive one 4xx through the S3 outcome middleware, exactly as a rejected
+	// object request would on the live surface.
+	r := gin.New()
+	r.Use(middleware.S3RequestOutcome())
+	r.GET("/:bucket", func(c *gin.Context) { c.Status(http.StatusForbidden) })
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/b", nil))
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	GetStatsHandler(c)
+
+	var dto statsDTO
+	if err := json.Unmarshal(w.Body.Bytes(), &dto); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if dto.Requests.ClientError < 1 {
+		t.Fatalf("expected recorded 4xx in request outcomes, got %+v", dto.Requests)
 	}
 }
 

@@ -88,7 +88,13 @@ func NewAdminRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 		// admin implementation of bucket/object CRUD; the admin middleware
 		// publishes the authenticated user on the context so the shared
 		// handlers need no knowledge of which surface they are serving.
-		RegisterStorageRoutes(api.Group("/s3"))
+		//
+		// Request-health is recorded only on this group so object operations
+		// done through the UI count, but admin-management endpoints and SPA
+		// asset fetches never pollute the 2xx/4xx/5xx view.
+		s3 := api.Group("/s3")
+		s3.Use(middleware.S3RequestOutcome())
+		RegisterStorageRoutes(s3)
 	}
 
 	// Embedded admin SPA. Any path not matched above falls through to the

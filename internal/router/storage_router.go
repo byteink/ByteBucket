@@ -31,6 +31,11 @@ func NewStorageRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 	// envelope. Label cardinality is bounded because path is c.FullPath().
 	r.Use(middleware.Metrics())
 
+	// Per-class request-health for the S3 data-plane. The whole :9000 surface
+	// is real object traffic, so it is mounted globally (the middleware itself
+	// excludes /health), unlike the admin surface where only /api/s3 qualifies.
+	r.Use(middleware.S3RequestOutcome())
+
 	// Rate limiting runs after Log/Metrics so a throttled request is still
 	// observed and ID-tagged, but BEFORE auth and CORS so an unauthenticated
 	// flood is rejected before reaching signature verification and filesystem

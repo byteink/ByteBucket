@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
@@ -73,6 +74,63 @@ func S3ActivityByBucket() map[string]*BucketActivity {
 		}
 	})
 	return out
+}
+
+// RequestOutcomes is the S3-surface request-health rollup: response counts by
+// status class. It powers the dashboard's 2xx/4xx/5xx view.
+type RequestOutcomes struct {
+	Success     float64 `json:"success"`     // 2xx
+	Redirect    float64 `json:"redirect"`    // 3xx (e.g. 304 conditional)
+	ClientError float64 `json:"clientError"` // 4xx
+	ServerError float64 `json:"serverError"` // 5xx
+}
+
+// S3RequestOutcome counts each S3-surface response by status class. Mounted on
+// the data-plane router (:9000) and the admin /api/s3 group only, so admin
+// polling, /metrics, /health and SPA assets never inflate request-health.
+func S3RequestOutcome() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Next()
+		switch c.FullPath() {
+		case "", "/health":
+			// Unmatched route or the orchestrator probe — not bucket traffic.
+			return
+		}
+		s3RequestsTotal.WithLabelValues(statusClass(c.Writer.Status())).Inc()
+	}
+}
+
+// statusClass maps an HTTP status code to its "Nxx" class label.
+func statusClass(code int) string {
+	switch {
+	case code >= 500:
+		return "5xx"
+	case code >= 400:
+		return "4xx"
+	case code >= 300:
+		return "3xx"
+	default:
+		return "2xx"
+	}
+}
+
+// S3RequestOutcomes aggregates the per-class request counters into the
+// dashboard rollup.
+func S3RequestOutcomes() RequestOutcomes {
+	var o RequestOutcomes
+	forEach(s3RequestsTotal, func(labels map[string]string, v float64) {
+		switch labels["class"] {
+		case "2xx":
+			o.Success += v
+		case "3xx":
+			o.Redirect += v
+		case "4xx":
+			o.ClientError += v
+		case "5xx":
+			o.ServerError += v
+		}
+	})
+	return o
 }
 
 // MultipartInProgress returns the live multipart-uploads gauge value — a real
