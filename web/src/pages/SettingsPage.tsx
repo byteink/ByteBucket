@@ -235,8 +235,9 @@ function RetentionField({
   return (
     <div className="flex items-end gap-2">
       <div className="flex-1">
-        <label className="field-label">Retention (days)</label>
+        <label className="field-label" htmlFor="retention-days">Retention (days)</label>
         <input
+          id="retention-days"
           type="number"
           className="input"
           value={value}
@@ -279,10 +280,12 @@ function NumberField({
   onChange: (v: number) => void;
   hint?: string;
 }>) {
+  const id = `nf-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
   return (
     <div>
-      <label className="field-label">{label}</label>
+      <label className="field-label" htmlFor={id}>{label}</label>
       <input
+        id={id}
         type="number"
         className="input"
         value={value}

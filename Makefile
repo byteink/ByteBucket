@@ -1,6 +1,7 @@
-.PHONY: ui dev build test vet pentest image-scan clean
+.PHONY: ui dev build test vet pentest e2e-web image-scan clean
 
 WEB_DIR := web
+E2E_DIR := e2e
 DIST_SRC := $(WEB_DIR)/dist
 DIST_DST := internal/webui/dist
 
@@ -33,6 +34,19 @@ test:
 pentest:
 	@trap 'docker compose -f scripts/pentest/docker-compose.yml down -v --remove-orphans >/dev/null 2>&1' EXIT; \
 	docker compose -f scripts/pentest/docker-compose.yml up --build --abort-on-container-exit --exit-code-from pentest
+
+# e2e-web drives the admin UI in a real browser (Playwright/Chromium) against a
+# freshly-built container. The browser toolchain lives in e2e/ — isolated from
+# the web build so the production image never pulls Playwright or its browsers.
+# The container is always torn down with its volume, so every run starts from a
+# clean store (the fsync/retention specs depend on the default startup state).
+e2e-web:
+	cd $(E2E_DIR) && npm ci --no-audit --no-fund && npx playwright install chromium
+	docker compose -f docker/compose.yml up --build -d
+	@for i in $$(seq 1 60); do curl -sf http://localhost:9001/health >/dev/null 2>&1 && break; sleep 1; done; \
+	( cd $(E2E_DIR) && npx playwright test ); status=$$?; \
+	docker compose -f docker/compose.yml down -v --remove-orphans >/dev/null 2>&1; \
+	exit $$status
 
 # image-scan builds the production image, then runs trivy against it inside
 # a throwaway container so no local trivy install is required. We gate on
