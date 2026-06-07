@@ -17,6 +17,10 @@ const rateLimitConfigPath = "/config/ratelimit"
 // (fsync) toggle, registered for GET/PUT below.
 const syncWritesConfigPath = "/config/sync"
 
+// retentionConfigPath is the admin API subpath for the request-sample retention
+// (in days), registered for GET/PUT below.
+const retentionConfigPath = "/config/retention"
+
 // NewAdminRouter initializes the routes for admin operations.
 //
 // The embedded admin SPA is served at / (and any unknown path) without auth;
@@ -73,6 +77,9 @@ func NewAdminRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 	{
 		api.GET("/config", handlers.GetConfigHandler)
 		api.GET("/stats", handlers.GetStatsHandler)
+		api.GET("/stats/requests", handlers.GetRequestSeriesHandler)
+		api.GET(retentionConfigPath, handlers.GetRetentionHandler)
+		api.PUT(retentionConfigPath, handlers.PutRetentionHandler)
 		api.GET(rateLimitConfigPath, handlers.GetRateLimitHandler)
 		api.PUT(rateLimitConfigPath, handlers.PutRateLimitHandler)
 		api.DELETE(rateLimitConfigPath, handlers.DeleteRateLimitHandler)

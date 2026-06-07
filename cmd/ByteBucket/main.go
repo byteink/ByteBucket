@@ -18,6 +18,7 @@ import (
 	"ByteBucket/internal/handlers"
 	"ByteBucket/internal/middleware"
 	"ByteBucket/internal/router"
+	"ByteBucket/internal/sampler"
 	"ByteBucket/internal/storage"
 )
 
@@ -27,6 +28,11 @@ import (
 // to SIGKILL past this point — keeping it here means any leaked connection is
 // visible as a shutdown error rather than a silent kill.
 const shutdownTimeout = 30 * time.Second
+
+// requestSampleInterval is how often the request-outcome sampler snapshots the
+// counters. One minute matches the chart's finest bucket (the 1h range), so no
+// finer resolution would ever be displayed.
+const requestSampleInterval = time.Minute
 
 // Per-server I/O bounds. These are deliberately conservative for a first pass:
 //
@@ -247,6 +253,18 @@ func run(ctx context.Context) error {
 		return err
 	}
 	slog.Info("object write durability", "fsync", syncEff)
+
+	// Request-outcome time series: a background sampler snapshots the cumulative
+	// S3 request counters once a minute into BoltDB, pruning past the retention
+	// window, so the dashboard can chart 2xx/4xx/5xx over a navigable range. The
+	// goroutine stops when ctx cancels; losing the final partial minute on
+	// shutdown is acceptable for a trend series.
+	retDays, err := handlers.InitRequestRetentionFromStore()
+	if err != nil {
+		return err
+	}
+	slog.Info("request-sample retention", "days", retDays)
+	go sampler.Run(ctx, requestSampleInterval, middleware.S3RequestOutcomes, handlers.RequestRetentionDays)
 
 	// Request rate limiting is opt-in and OFF by default; the environment
 	// seeds a baseline (see loadRateLimitConfig for the env contract). The

@@ -72,6 +72,12 @@ func InitUserStore(fileName string) error {
 		if _, err := tx.CreateBucketIfNotExists([]byte(configBucket)); err != nil {
 			return err
 		}
+		// RequestSamples holds the per-minute S3 request-outcome time series
+		// powering the dashboard chart. Same file as Users/Config so there is a
+		// single durable store to back up and one open handle.
+		if _, err := tx.CreateBucketIfNotExists([]byte(requestSamplesBucket)); err != nil {
+			return err
+		}
 		log.Println("User store initialized at", dbPath)
 		return nil
 	})
