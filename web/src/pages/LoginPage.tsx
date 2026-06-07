@@ -27,7 +27,7 @@ export default function LoginPage() {
         return;
       }
       saveSession(session);
-      navigate('/buckets', { replace: true });
+      navigate('/dashboard', { replace: true });
     } finally {
       setBusy(false);
     }
