@@ -118,16 +118,32 @@ export async function deleteRateLimit(s: Session): Promise<RateLimitConfig> {
   return ((await res.json()) as { effective: RateLimitConfig }).effective;
 }
 
+// BucketActivity is cumulative S3 object-operation activity (a total or per bucket).
+export interface BucketActivity {
+  uploads: number;
+  downloads: number;
+  deletes: number;
+  bytesIn: number;
+  bytesOut: number;
+}
+
+// BucketRow is one bucket's on-disk size plus its operation counters.
+export interface BucketRow {
+  name: string;
+  bytes: number;
+  uploads: number;
+  downloads: number;
+  deletes: number;
+}
+
 // Stats is the admin dashboard summary returned by GET /api/stats.
 export interface Stats {
   buckets: number;
   objects: number;
   bytes: number;
-  requests: number;
-  statusClasses: Record<string, number>;
   multipartInProgress: number;
-  p95LatencyMs: number;
-  topBuckets: { name: string; bytes: number }[];
+  activity: BucketActivity;
+  perBucket: BucketRow[];
 }
 
 export async function getStats(s: Session): Promise<Stats> {

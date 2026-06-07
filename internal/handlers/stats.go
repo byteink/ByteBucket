@@ -12,60 +12,74 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// topBucketsLimit caps how many buckets the dashboard's "largest buckets" list
-// shows, keeping the panel readable regardless of bucket count.
-const topBucketsLimit = 5
-
 // bucketSize is a single bucket's accurate on-disk byte total.
 type bucketSize struct {
 	Name  string `json:"name"`
 	Bytes int64  `json:"bytes"`
 }
 
-// statsDTO is the admin dashboard summary. Storage totals are computed on
-// demand by walking the store; the request/latency/multipart figures come from
-// the metrics registry.
-type statsDTO struct {
-	Buckets             int64              `json:"buckets"`
-	Objects             int64              `json:"objects"`
-	Bytes               int64              `json:"bytes"`
-	Requests            float64            `json:"requests"`
-	StatusClasses       map[string]float64 `json:"statusClasses"`
-	MultipartInProgress float64            `json:"multipartInProgress"`
-	P95LatencyMs        float64            `json:"p95LatencyMs"`
-	TopBuckets          []bucketSize       `json:"topBuckets"`
+// bucketRow is one bucket's row in the dashboard: on-disk size plus its
+// cumulative object-operation counters.
+type bucketRow struct {
+	Name      string  `json:"name"`
+	Bytes     int64   `json:"bytes"`
+	Uploads   float64 `json:"uploads"`
+	Downloads float64 `json:"downloads"`
+	Deletes   float64 `json:"deletes"`
 }
 
-// GetStatsHandler returns the dashboard summary. Storage counts come from a
-// bounded walk of the objects store (excluding sidecars, so they match
-// ListObjects); request health, p95 latency and multipart activity come from
-// the metrics registry.
+// statsDTO is the admin dashboard summary. Storage counts come from a bounded
+// walk of the objects store; activity is real S3 object operations per bucket
+// (not the admin-dominated HTTP request counter).
+type statsDTO struct {
+	Buckets             int64                    `json:"buckets"`
+	Objects             int64                    `json:"objects"`
+	Bytes               int64                    `json:"bytes"`
+	MultipartInProgress float64                  `json:"multipartInProgress"`
+	Activity            middleware.BucketActivity `json:"activity"`
+	PerBucket           []bucketRow              `json:"perBucket"`
+}
+
+// GetStatsHandler returns the dashboard summary: storage footprint plus real
+// object-operation activity (uploads/downloads/deletes/bytes), both as totals
+// and per current bucket, sorted by size.
 func GetStatsHandler(c *gin.Context) {
-	perBucket, objects, err := computeStorageStats()
+	sizes, objects, err := computeStorageStats()
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Failed to compute stats")
 		return
 	}
 
-	bucketCount := int64(len(perBucket))
-	var bytes int64
-	for _, b := range perBucket {
-		bytes += b.Bytes
-	}
-	sort.Slice(perBucket, func(i, j int) bool { return perBucket[i].Bytes > perBucket[j].Bytes })
-	if len(perBucket) > topBucketsLimit {
-		perBucket = perBucket[:topBucketsLimit]
+	activity := middleware.S3ActivityByBucket()
+
+	var total middleware.BucketActivity
+	for _, a := range activity {
+		total.Uploads += a.Uploads
+		total.Downloads += a.Downloads
+		total.Deletes += a.Deletes
+		total.BytesIn += a.BytesIn
+		total.BytesOut += a.BytesOut
 	}
 
+	var bytes int64
+	rows := make([]bucketRow, 0, len(sizes))
+	for _, s := range sizes {
+		bytes += s.Bytes
+		r := bucketRow{Name: s.Name, Bytes: s.Bytes}
+		if a := activity[s.Name]; a != nil {
+			r.Uploads, r.Downloads, r.Deletes = a.Uploads, a.Downloads, a.Deletes
+		}
+		rows = append(rows, r)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Bytes > rows[j].Bytes })
+
 	c.JSON(http.StatusOK, statsDTO{
-		Buckets:             bucketCount,
+		Buckets:             int64(len(sizes)),
 		Objects:             objects,
 		Bytes:               bytes,
-		Requests:            middleware.TotalRequests(),
-		StatusClasses:       middleware.RequestsByStatusClass(),
 		MultipartInProgress: middleware.MultipartInProgress(),
-		P95LatencyMs:        middleware.RequestLatencyP95Seconds() * 1000,
-		TopBuckets:          perBucket,
+		Activity:            total,
+		PerBucket:           rows,
 	})
 }
 

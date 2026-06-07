@@ -8,7 +8,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -74,6 +73,22 @@ var (
 		Name: "bytebucket_objects_bytes_total",
 		Help: "Total bytes of objects per bucket (best-effort, delta-updated; not recomputed at startup).",
 	}, []string{"bucket"})
+
+	// s3OperationsTotal counts real object operations per bucket, independent
+	// of the HTTP request counter (which is dominated by admin-UI polling and
+	// mixes both surfaces). operation is one of upload/download/delete.
+	s3OperationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "bytebucket_s3_operations_total",
+		Help: "Object operations per bucket (upload, download, delete).",
+	}, []string{"bucket", "operation"})
+
+	// s3BytesTransferredTotal counts object payload bytes per bucket by
+	// direction: in (uploads/copies), out (downloads). This is real data
+	// movement, not the HTTP body-size histogram.
+	s3BytesTransferredTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "bytebucket_s3_bytes_transferred_total",
+		Help: "Object payload bytes per bucket by direction (in=upload/copy, out=download).",
+	}, []string{"bucket", "direction"})
 )
 
 func init() {
@@ -86,6 +101,8 @@ func init() {
 		httpResponseSize,
 		MultipartUploadsInProgress,
 		ObjectsBytesTotal,
+		s3OperationsTotal,
+		s3BytesTransferredTotal,
 	)
 	// Go runtime and process-level metrics (go_*, process_*) power every
 	// standard Prometheus dashboard. The default registry installs both
@@ -144,21 +161,4 @@ func Metrics() gin.HandlerFunc {
 // instance across tests that reset the registry.
 func PrometheusHandler() http.Handler {
 	return promhttp.Handler()
-}
-
-// TotalRequests returns the cumulative count across every label combination of
-// the HTTP request counter. Used by the admin stats summary so the dashboard
-// can show a request total without scraping and parsing the Prometheus text.
-func TotalRequests() float64 {
-	ch := make(chan prometheus.Metric, 1024)
-	httpRequestsTotal.Collect(ch)
-	close(ch)
-	var sum float64
-	var m dto.Metric
-	for metric := range ch {
-		if err := metric.Write(&m); err == nil && m.Counter != nil {
-			sum += m.Counter.GetValue()
-		}
-	}
-	return sum
 }

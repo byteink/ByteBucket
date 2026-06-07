@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"ByteBucket/internal/middleware"
 	"ByteBucket/internal/storage"
 
 	"github.com/gin-gonic/gin"
@@ -85,11 +86,12 @@ func CopyObjectHandler(c *gin.Context) {
 	// (dstPath == srcPath) reads the original bytes via the open handle above
 	// while the new content lands in a separate inode before the rename.
 	dstPath := filepath.Join(objectsRoot, dstBucket, dstKey)
-	etag, _, err := finalizeObjectWrite(dstBucket, dstPath, src, meta)
+	etag, written, err := finalizeObjectWrite(dstBucket, dstPath, src, meta)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Error copying object")
 		return
 	}
+	middleware.RecordObjectUpload(dstBucket, written)
 
 	if cannedACL != "" {
 		auditACLChange(c, "object", dstBucket, dstKey, storage.ACLPrivate, cannedACL)

@@ -66,17 +66,16 @@ func TestStatsHandler_JSONShape(t *testing.T) {
 	if dto.Buckets != 1 || dto.Objects != 1 || dto.Bytes != 5 {
 		t.Fatalf("unexpected stats: %+v", dto)
 	}
-	if dto.StatusClasses == nil {
-		t.Fatal("statusClasses must be present")
-	}
 }
 
-func TestStatsHandler_TopBucketsSortedDescending(t *testing.T) {
+func TestStatsHandler_PerBucketSortedBySizeWithActivity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	withTempObjectsRoot(t)
-	seedObject(t, "small", "a", []byte("x"))         // 1 byte
-	seedObject(t, "big", "a", []byte("xxxxxxxxxx"))   // 10 bytes
-	seedObject(t, "medium", "a", []byte("xxxxx"))     // 5 bytes
+	// seedObject uploads via the real handler, so each seed records one upload
+	// for its bucket — exactly the per-bucket activity the dashboard surfaces.
+	seedObject(t, "act-small", "a", []byte("x"))          // 1 byte
+	seedObject(t, "act-big", "a", []byte("xxxxxxxxxx"))   // 10 bytes
+	seedObject(t, "act-medium", "a", []byte("xxxxx"))     // 5 bytes
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -87,13 +86,17 @@ func TestStatsHandler_TopBucketsSortedDescending(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &dto); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(dto.TopBuckets) != 3 {
-		t.Fatalf("topBuckets len=%d want 3", len(dto.TopBuckets))
+	if dto.Buckets != 3 || len(dto.PerBucket) != 3 {
+		t.Fatalf("bucket count=%d perBucket=%d want 3", dto.Buckets, len(dto.PerBucket))
 	}
-	if dto.TopBuckets[0].Name != "big" || dto.TopBuckets[2].Name != "small" {
-		t.Fatalf("topBuckets not sorted by size desc: %+v", dto.TopBuckets)
+	if dto.PerBucket[0].Name != "act-big" || dto.PerBucket[2].Name != "act-small" {
+		t.Fatalf("perBucket not sorted by size desc: %+v", dto.PerBucket)
 	}
-	if dto.Buckets != 3 {
-		t.Fatalf("bucket count=%d want 3", dto.Buckets)
+	// The largest bucket's single seed must show as one recorded upload.
+	if dto.PerBucket[0].Uploads < 1 {
+		t.Fatalf("expected per-bucket upload activity, got %+v", dto.PerBucket[0])
+	}
+	if dto.Activity.Uploads < 3 {
+		t.Fatalf("expected total uploads >= 3, got %v", dto.Activity.Uploads)
 	}
 }

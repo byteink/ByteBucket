@@ -58,11 +58,12 @@ func UploadObjectHandler(c *gin.Context) {
 		return
 	}
 
-	etag, _, err := finalizeObjectWrite(bucketName, dstPath, c.Request.Body, metadata)
+	etag, written, err := finalizeObjectWrite(bucketName, dstPath, c.Request.Body, metadata)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Error saving object")
 		return
 	}
+	middleware.RecordObjectUpload(bucketName, written)
 
 	// If the upload set an explicit canned ACL, audit it as if it were a
 	// PutObjectAcl call. The visible transition is "default -> <canned>";
@@ -318,6 +319,13 @@ func DownloadObjectHandler(c *gin.Context) {
 	// that sniffing fallback, so it is irrelevant here. modtime drives
 	// Last-Modified/If-Modified-Since and If-Range.
 	http.ServeContent(c.Writer, c.Request, "", info.ModTime(), f)
+
+	// Record real download activity per bucket. c.Writer.Size() is the bytes
+	// actually written — the full object on a 200, the slice on a 206 — so a
+	// ranged read is counted at its true cost.
+	if n := c.Writer.Size(); n > 0 {
+		middleware.RecordObjectDownload(bucketName, int64(n))
+	}
 }
 
 // rangeClass is the result of pre-validating a Range request header against a
@@ -474,6 +482,7 @@ func removeObject(bucketName, objectKey string) error {
 		}
 		parentDir = filepath.Dir(parentDir)
 	}
+	middleware.RecordObjectDelete(bucketName)
 	return nil
 }
 
