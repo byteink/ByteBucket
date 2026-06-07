@@ -165,3 +165,16 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   REMAINING: A5 (audit viewer — needs audit-event persistence first, a backend
   feature), A6 (visual ACL matrix — polish over the working JSON editor),
   Phase 3 (versioning/lifecycle — large; roadmap-gated to "real need only").
+- 2026-06-07: dashboard request-outcome work DONE — (1) scoped 2xx/4xx/5xx counter
+  to real S3 traffic (storage :9000 + admin /api/s3 group), excluding admin
+  polling/SPA/metrics; (2) per-minute time series: a background sampler snapshots
+  the cumulative counters into BoltDB (RequestSamples), pruned to a configurable
+  retention (default 30d, GET/PUT /api/config/retention); (3) navigable chart API
+  GET /api/stats/requests?range=1h|24h|7d|14d|30d&offset=N (server rolls minute
+  samples into <=60 wall-aligned buckets, nav bounded by retention); (4) CSS
+  stacked-bar chart on the dashboard (no charting lib) with range picker +
+  back/forward window nav + per-class totals, on-system monochrome (danger for
+  5xx only). Visually verified via Playwright. Unit + E2E + pentest (232 green).
+  NOTE: real time-series trending lives here now, not Grafana (user finds it heavy
+  and rejected session-only client polling).
+  NEXT (user-requested, not yet started): admin-panel E2E test coverage sweep.
