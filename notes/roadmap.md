@@ -177,4 +177,15 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   5xx only). Visually verified via Playwright. Unit + E2E + pentest (232 green).
   NOTE: real time-series trending lives here now, not Grafana (user finds it heavy
   and rejected session-only client polling).
-  NEXT (user-requested, not yet started): admin-panel E2E test coverage sweep.
+- 2026-06-07: admin-panel E2E sweep DONE — (1) management-API E2E (tests/
+  admin_api_e2e_test.go): GET /api/config no-secret-leak, full user lifecycle
+  (create/list/update/delete) with secret-never-listed, ACL-update enforcement on
+  :9000, rate-limit override round-trip, auth-boundary table; fixed UpdateUser
+  500->404 via storage.ErrUserNotFound. (2) Browser E2E (e2e/ — isolated Playwright
+  package, NOT in web/ so the prod image never pulls Playwright/browsers): auth
+  guard/login/logout, dashboard cards + request-chart range/nav, per-bucket table,
+  user create/delete, fsync + retention settings. Run via `make e2e-web` (fresh
+  container, serial, auto-teardown). Fixed a real a11y gap (Settings number inputs
+  now have htmlFor/id). Full Go suite + 11 browser tests green.
+  REMAINING (unchanged): A5 audit viewer, A6 visual ACL matrix, Phase 3 versioning.
+  Possible follow-up: wire `make e2e-web` into CI (needs Docker + browser in runner).
