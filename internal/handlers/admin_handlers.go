@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"ByteBucket/internal/storage"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -72,6 +73,10 @@ func UpdateUserHandler(c *gin.Context) {
 	}
 
 	if err := storage.UpdateUserACL(accessKeyID, aclRules); err != nil {
+		if errors.Is(err, storage.ErrUserNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Error updating user: %v", err)})
 		return
 	}

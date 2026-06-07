@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -19,6 +20,10 @@ import (
 
 var userDB *bolt.DB
 var encryptionKey []byte
+
+// ErrUserNotFound is returned by user mutations targeting an absent accessKeyID,
+// so callers can distinguish a client error (404) from a persistence fault (500).
+var ErrUserNotFound = errors.New("user not found")
 
 // Detect if running inside Docker
 func isRunningInDocker() bool {
@@ -174,7 +179,7 @@ func GetUser(accessKey string) (*User, error) {
 		b := tx.Bucket([]byte("Users"))
 		v := b.Get([]byte(accessKey))
 		if v == nil {
-			return fmt.Errorf("user not found")
+			return ErrUserNotFound
 		}
 		return json.Unmarshal(v, &user)
 	})
@@ -262,7 +267,7 @@ func UpdateUserACL(accessKeyID string, aclRules []ACLRule) error {
 		b := tx.Bucket([]byte("Users"))
 		v := b.Get([]byte(accessKeyID))
 		if v == nil {
-			return fmt.Errorf("user not found")
+			return ErrUserNotFound
 		}
 		var u User
 		if err := json.Unmarshal(v, &u); err != nil {
