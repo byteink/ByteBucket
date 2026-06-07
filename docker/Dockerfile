@@ -25,7 +25,10 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: build the Go binary with the bundled UI embedded via go:embed.
-FROM golang:1.26-alpine AS builder
+# Pin the exact patch (not the floating 1.26-alpine) so the stdlib that ships
+# in the binary is deterministic — 1.26.4 carries the fix for CVE-2026-42504
+# (net/textproto MIME-header decoding DoS), which the image scan gates on.
+FROM golang:1.26.4-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
