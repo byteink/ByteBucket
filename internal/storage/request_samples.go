@@ -3,7 +3,7 @@ package storage
 import (
 	"encoding/binary"
 
-	"github.com/boltdb/bolt"
+	bolt "go.etcd.io/bbolt"
 )
 
 // requestSamplesBucket holds per-minute deltas of S3 request outcomes, keyed by

@@ -1,6 +1,6 @@
 package storage
 
-import "github.com/boltdb/bolt"
+import bolt "go.etcd.io/bbolt"
 
 // configBucket is the BoltDB bucket holding operator settings as opaque blobs
 // keyed by name. Storage stays a dumb key/value store here: it neither parses
