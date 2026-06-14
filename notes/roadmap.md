@@ -10,6 +10,8 @@ Implemented and working:
 
 - SigV4 surface (`:9000`) + admin surface (`:9001`, JSON + embedded React SPA)
 - PutObject / GetObject / DeleteObject / HeadObject
+- DeleteObjects batch (`POST ?delete`), CopyObject (`x-amz-copy-source`)
+- Conditional requests (If-Match / If-None-Match / If-(Un)Modified-Since, 304/412)
 - Multipart upload (initiate / upload part / list parts / complete / abort)
 - ListObjectsV2 (KeyCount, continuation tokens, sidecar filtering)
 - ACLs (`private` | `public-read`), object + bucket level, anonymous read
@@ -18,8 +20,12 @@ Implemented and working:
 - HTTP range requests (206 / 416, Accept-Ranges)
 - Opt-in proxy-aware rate limiting (+ runtime config via admin UI/API)
 - Presigned download URLs (`?presign`, admin-only convenience)
+- Durability: atomic temp+rename writes, configurable fsync, striped per-object locks
+- Admin panel: dashboard (storage + request time-series), object browser
+  (upload, tag editor, batch delete, copy/rename), users, settings, audit log
+- Control-plane audit log (BoltDB-backed, `GET /api/audit`, viewer UI)
 
-## Phase 0 — close testing gaps (BLOCKS everything else)
+## Phase 0 — close testing gaps (BLOCKS everything else) — DONE (2026-06-06)
 
 Production code with untested paths. Close these red/green before any new feature.
 Full detail + what each test must assert: `notes/testing-gaps.md`. Order = security first.
@@ -103,8 +109,10 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
 ### A2. Object tagging editor (in ObjectDetail) — DONE (2026-06-07). getObjectTagging/putObjectTagging + editor UI.
 ### A3. Bucket ACL toggle — ALREADY DONE (pre-existing BucketsPage.onToggleACL).
 ### A4. Presigned link button — ALREADY DONE (pre-existing ObjectDetailPage.onPresign).
-### A5. Audit log viewer — NEEDS BACKEND: ACL audit currently only slog'd, not stored.
-   Requires persisting audit events before a read API/UI is possible. Larger; deferred.
+### A5. Audit log viewer — DONE (2026-06-07). BoltDB AuditLog (nano+seq keys, capped 10k),
+   best-effort recordAudit() wired into user CRUD + sync/retention/ratelimit setters,
+   admin GET /api/audit (newest-first, ?before cursor) + AuditPage with load-more.
+   Scope: admin control-plane (user + config), NOT per-object PUT/DELETE.
 ### A6. Visual ACL editor for users — replace raw-JSON ACL with bucket x action matrix. UI polish.
 ### A7. Upload (drag-drop) + multi-select delete — DONE (2026-06-07). Upload pre-existed; added batch delete.
 ### A8. Copy / move / rename — DONE (2026-06-07). copyObject client + Rename (copy+delete) action.
@@ -201,3 +209,10 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   PUT/DELETE (that is the dashboard activity/metrics story). Object-level audit
   is a possible future extension.
   REMAINING: A6 visual ACL matrix, Phase 3 versioning.
+- 2026-06-10: maintenance (no roadmap feature) — migrated boltdb/bolt -> bbolt
+  v1.4.3, pinned Docker builder to golang:1.26.4-alpine (CVE-2026-42504), webui
+  access-key chip styling.
+- 2026-06-14: roadmap reconciled with shipped code — marked A5 audit viewer DONE
+  inline (was stale "deferred"), added Phase 0 DONE marker, refreshed the
+  baseline "Current state" list. REMAINING unchanged: A6 visual ACL matrix,
+  Phase 3 (versioning / bucket policy / extra checksums).
