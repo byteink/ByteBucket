@@ -1,10 +1,9 @@
 ---
 name: release
-description: Cut a ByteBucket release — preflight, tag vX.Y.Z, and push so the release workflow builds and publishes the Docker image.
-argument-hint: "[patch|minor|major] or [explicit version e.g. 1.2.0]"
+description: Cut a ByteBucket release — preflight (clean tree, on main, up-to-date, tests/vet/pentest/image-scan green), tag vX.Y.Z, and push so the release workflow builds and publishes the Docker image to ghcr.io/byteink/bytebucket. Use when the user wants to cut/ship a release, bump the version, or tag a new version. Argument is a bump type (patch|minor|major) or an explicit version (e.g. 1.2.0); defaults to patch.
 ---
 
-Cut a new release for ByteBucket. `$ARGUMENTS` is either a semver bump type (`patch`, `minor`, `major`) or an explicit version (e.g. `1.2.0`). If empty, default to `patch`.
+Cut a new release for ByteBucket. The argument is either a semver bump type (`patch`, `minor`, `major`) or an explicit version (e.g. `1.2.0`). If empty, default to `patch`.
 
 Version lives in git tags, not in a file. The GitHub Actions workflow at `.github/workflows/release.yml` triggers on tags matching `v*`, builds a multi-arch Docker image, pushes it to `ghcr.io/byteink/bytebucket`, and creates a GitHub Release with auto-generated notes.
 
@@ -14,7 +13,7 @@ Version lives in git tags, not in a file. The GitHub Actions workflow at `.githu
 
 - Run `git describe --tags --abbrev=0 2>/dev/null` to get the latest tag.
 - If no tag exists yet, treat current as `v0.0.0`.
-- Compute next version from `$ARGUMENTS`:
+- Compute next version from the argument:
   - `patch` (default): `v0.1.0` → `v0.1.1`
   - `minor`: `v0.1.0` → `v0.2.0`
   - `major`: `v0.1.0` → `v1.0.0`
@@ -82,7 +81,7 @@ On success, report:
 - Image reference that will be pulled by consumers (e.g. `ghcr.io/byteink/bytebucket:vX.Y.Z` and `:latest`)
 - Link to the created GitHub Release (the workflow creates it; after the run completes: `gh release view vX.Y.Z --json url --jq .url`)
 
-On failure during preflight, report which check failed and do NOT tag. The user fixes the cause and re-runs `/release`.
+On failure during preflight, report which check failed and do NOT tag. The user fixes the cause and re-runs the skill.
 
 ## Hard rules
 
@@ -91,7 +90,7 @@ On failure during preflight, report which check failed and do NOT tag. The user 
 - Never delete an existing remote tag to "fix" a version number. Bump to the next version instead.
 - Never create a release from a branch other than `main`.
 - Never run this against an uncommitted working tree.
-- Do not edit `.github/workflows/release.yml` as part of this command. Workflow changes go through a normal commit/PR flow.
+- Do not edit `.github/workflows/release.yml` as part of this skill. Workflow changes go through a normal commit/PR flow.
 
 ## Pre-release versions
 

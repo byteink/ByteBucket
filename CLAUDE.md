@@ -125,7 +125,7 @@ add to that list, shrink it.
 
 ## Release flow
 
-Tags drive releases. The `/release` slash command (`.claude/commands/release.md`) automates preflight (clean tree, up-to-date with origin/main, full test suite green) and pushes the tag. The `.github/workflows/release.yml` workflow builds multi-arch images on native runners (no QEMU), publishes to `ghcr.io/byteink/bytebucket`, and creates a GitHub Release. Pre-release tags (`vX.Y.Z-rc.N`) are excluded from the `latest` rotation automatically. Never force-push a tag; bump to the next version instead.
+Tags drive releases. The `release` skill (`.claude/skills/release/SKILL.md`, invoked as `/release`) automates preflight (clean tree, up-to-date with origin/main, full test suite green) and pushes the tag. The `.github/workflows/release.yml` workflow builds multi-arch images on native runners (no QEMU), publishes to `ghcr.io/byteink/bytebucket`, and creates a GitHub Release. Pre-release tags (`vX.Y.Z-rc.N`) are excluded from the `latest` rotation automatically. Never force-push a tag; bump to the next version instead.
 
 ## notes/ (dev scratch space)
 
