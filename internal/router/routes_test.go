@@ -1,6 +1,8 @@
 package router
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"ByteBucket/internal/middleware"
@@ -41,6 +43,34 @@ func TestStorageRouterRegistersS3Surface(t *testing.T) {
 	for _, tc := range cases {
 		if !routeExists(r, tc.method, tc.path) {
 			t.Errorf("storage router missing %s %s", tc.method, tc.path)
+		}
+	}
+}
+
+// The storage surface must serve a favicon so a browser probing the storage
+// origin does not hit the /:bucket dispatcher and 400 on the invalid bucket
+// name. The dedicated route must intercept before that path. With a built UI
+// bundle it returns the icon (200); with CI's unbuilt dist (only .keep) it is a
+// clean 404 — never the bucket-name 400.
+func TestStorageRouterServesFavicon(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := NewStorageRouter(middleware.NewRateLimitController(middleware.RateLimitConfig{}))
+
+	if !routeExists(r, "GET", "/favicon.ico") {
+		t.Fatal("storage router missing GET /favicon.ico")
+	}
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/favicon.ico", nil))
+	if w.Code != http.StatusOK && w.Code != http.StatusNotFound {
+		t.Fatalf("favicon status = %d, want 200 (built) or 404 (unbuilt) — not the bucket 400", w.Code)
+	}
+	if w.Code == http.StatusOK {
+		if ct := w.Header().Get("Content-Type"); ct != "image/vnd.microsoft.icon" {
+			t.Fatalf("favicon content-type = %q, want image/vnd.microsoft.icon", ct)
+		}
+		if w.Body.Len() == 0 {
+			t.Fatal("favicon served an empty body")
 		}
 	}
 }

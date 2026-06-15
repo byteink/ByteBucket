@@ -1,12 +1,29 @@
 package router
 
 import (
+	"net/http"
+
 	"ByteBucket/internal/auth"
 	"ByteBucket/internal/handlers"
 	"ByteBucket/internal/middleware"
+	"ByteBucket/internal/webui"
 
 	"github.com/gin-gonic/gin"
 )
+
+// faviconHandler serves the embedded favicon on the storage surface. A browser
+// opening a public-object link on the storage origin probes /favicon.ico; without
+// this it matches the /:bucket route and 400s on the invalid bucket name. Public
+// and static — no auth, no user input — so it is registered alongside /health,
+// before the auth/validation middleware. 404 when the UI bundle is unbuilt.
+func faviconHandler(c *gin.Context) {
+	icon, ok := webui.FaviconICO()
+	if !ok {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	c.Data(http.StatusOK, "image/vnd.microsoft.icon", icon)
+}
 
 // NewStorageRouter sets up Gin routes and middleware in an S3-compatible
 // manner. The route table is shared with the admin router via
@@ -50,6 +67,11 @@ func NewStorageRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 
 	// Public health check (no authentication required).
 	r.GET("/health", handlers.HealthHandler)
+
+	// Favicon: registered before the auth/validation middleware so a browser
+	// probing the storage origin gets the icon (200) instead of a bucket-name
+	// 400. No valid bucket can be named "favicon.ico", so this shadows nothing.
+	r.GET("/favicon.ico", faviconHandler)
 
 	// Per-bucket CORS must run before SigV4 so browser preflights (which are
 	// unauthenticated) can be answered. Buckets without a CORS config return

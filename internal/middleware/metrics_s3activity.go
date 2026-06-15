@@ -92,8 +92,8 @@ func S3RequestOutcome() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
 		switch c.FullPath() {
-		case "", "/health":
-			// Unmatched route or the orchestrator probe — not bucket traffic.
+		case "", "/health", "/favicon.ico":
+			// Unmatched route, orchestrator probe, or favicon probe — not bucket traffic.
 			return
 		}
 		s3RequestsTotal.WithLabelValues(statusClass(c.Writer.Status())).Inc()

@@ -36,8 +36,9 @@ func AccessLog() gin.HandlerFunc {
 			return
 		}
 		switch c.FullPath() {
-		case "", "/health":
-			// Unmatched route or the orchestrator probe — not object traffic.
+		case "", "/health", "/favicon.ico":
+			// Unmatched route, orchestrator probe, or browser favicon probe —
+			// not object traffic.
 			return
 		}
 		e := storage.Event{

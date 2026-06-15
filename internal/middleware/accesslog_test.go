@@ -168,21 +168,22 @@ func TestAccessLog_DisabledRecordsNothing(t *testing.T) {
 	}
 }
 
-func TestAccessLog_SkipsHealthAndUnmatched(t *testing.T) {
+func TestAccessLog_SkipsHealthFaviconAndUnmatched(t *testing.T) {
 	setupEventStoreMW(t)
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(AccessLog())
 	r.GET("/health", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/favicon.ico", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/health", nil))
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/favicon.ico", nil))
 	// Unmatched route (no registered handler) -> 404, FullPath == "".
 	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/nope", nil))
 	drainEvents()
 
 	got, _ := storage.QueryEvents(storage.EventData, 10, 0)
 	if len(got) != 0 {
-		t.Fatalf("health/unmatched recorded %d events, want 0", len(got))
+		t.Fatalf("health/favicon/unmatched recorded %d events, want 0", len(got))
 	}
 }

@@ -48,6 +48,17 @@ type spaHandler struct {
 	root fs.FS
 }
 
+// FaviconICO returns the embedded favicon.ico, or false when the UI bundle has
+// not been built (dist holds only .keep). Lets the storage surface serve the
+// same icon as the admin SPA without pulling in the SPA fallback handler.
+func FaviconICO() ([]byte, bool) {
+	b, err := distFS.ReadFile("dist/favicon.ico")
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
 func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

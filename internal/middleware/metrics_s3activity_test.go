@@ -45,6 +45,7 @@ func TestS3RequestOutcome_CountsByClassAndSkipsHealth(t *testing.T) {
 	r.GET("/bad", func(c *gin.Context) { c.Status(http.StatusForbidden) })
 	r.GET("/boom", func(c *gin.Context) { c.Status(http.StatusInternalServerError) })
 	r.GET("/health", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/favicon.ico", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	before := S3RequestOutcomes()
 	hit := func(p string) {
@@ -54,11 +55,12 @@ func TestS3RequestOutcome_CountsByClassAndSkipsHealth(t *testing.T) {
 	hit("/ok")
 	hit("/bad")
 	hit("/boom")
-	hit("/health") // must be excluded from request-health accounting
+	hit("/health")      // must be excluded from request-health accounting
+	hit("/favicon.ico") // favicon probe is not bucket traffic — also excluded
 	after := S3RequestOutcomes()
 
 	if d := after.Success - before.Success; d != 1 {
-		t.Fatalf("2xx delta = %v, want 1 (health excluded)", d)
+		t.Fatalf("2xx delta = %v, want 1 (health + favicon excluded)", d)
 	}
 	if d := after.ClientError - before.ClientError; d != 1 {
 		t.Fatalf("4xx delta = %v, want 1", d)
