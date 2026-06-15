@@ -36,6 +36,9 @@ func wantsJSON(c *gin.Context) bool {
 // callers get JSON. RequestId is pulled from the per-request middleware so
 // an error body and the x-amz-request-id response header agree.
 func respondError(c *gin.Context, status int, code, message string) {
+	// Publish the S3 error code for the access-log capture (records what failed,
+	// e.g. NoSuchKey/AccessDenied) before writing the response body.
+	c.Set(middleware.ErrorCodeContextKey, code)
 	body := S3ErrorBody{Code: code, Message: message, RequestId: middleware.RequestID(c)}
 	if wantsJSON(c) {
 		c.AbortWithStatusJSON(status, body)

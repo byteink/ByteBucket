@@ -16,9 +16,10 @@ const (
 	maxAuditLimit     = 200
 )
 
-// recordAudit appends one control-plane audit event, attributing it to the
-// authenticated admin on the context. Best-effort: a failed append is logged,
-// never propagated, so auditing can never break the action being audited.
+// recordAudit appends one control-plane event to the unified log, attributing
+// it to the authenticated admin on the context. Best-effort: a failed append is
+// logged, never propagated, so auditing can never break the action being
+// audited.
 func recordAudit(c *gin.Context, action, target, detail string) {
 	actor := ""
 	if v, ok := c.Get("user"); ok {
@@ -26,10 +27,11 @@ func recordAudit(c *gin.Context, action, target, detail string) {
 			actor = u.AccessKeyID
 		}
 	}
-	if err := storage.AppendAuditEvent(storage.AuditEvent{
+	if err := storage.AppendEvent(storage.Event{
 		TimeUnixNano: time.Now().UnixNano(),
+		Category:     storage.EventControl,
 		Actor:        actor,
-		Action:       action,
+		Op:           action,
 		Target:       target,
 		Detail:       detail,
 	}); err != nil {
@@ -80,7 +82,7 @@ func GetAuditHandler(c *gin.Context) {
 		before = n
 	}
 
-	events, err := storage.QueryAuditEvents(limit, before)
+	events, err := storage.QueryEvents(storage.EventControl, limit, before)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Failed to read audit log")
 		return
@@ -92,7 +94,7 @@ func GetAuditHandler(c *gin.Context) {
 			Ts:     e.TimeUnixNano,
 			Time:   time.Unix(0, e.TimeUnixNano).UTC().Format(time.RFC3339),
 			Actor:  e.Actor,
-			Action: e.Action,
+			Action: e.Op,
 			Target: e.Target,
 			Detail: e.Detail,
 		})

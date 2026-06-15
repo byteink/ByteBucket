@@ -19,7 +19,7 @@ func TestRecordAudit_StoresWithActorFromContext(t *testing.T) {
 	c.Set("user", &storage.User{AccessKeyID: "AKADMIN"})
 	recordAudit(c, "user.create", "u1", "via test")
 
-	got, err := storage.QueryAuditEvents(10, 0)
+	got, err := storage.QueryEvents(storage.EventControl, 10, 0)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestRecordAudit_StoresWithActorFromContext(t *testing.T) {
 		t.Fatalf("got %d events, want 1", len(got))
 	}
 	e := got[0]
-	if e.Actor != "AKADMIN" || e.Action != "user.create" || e.Target != "u1" || e.Detail != "via test" {
+	if e.Actor != "AKADMIN" || e.Op != "user.create" || e.Target != "u1" || e.Detail != "via test" {
 		t.Fatalf("recorded event wrong: %+v", e)
 	}
 	if e.TimeUnixNano == 0 {
@@ -40,7 +40,7 @@ func TestRecordAudit_NoUserLeavesActorEmpty(t *testing.T) {
 	setupHandlerStore(t)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	recordAudit(c, "config.sync", "false", "")
-	got, _ := storage.QueryAuditEvents(10, 0)
+	got, _ := storage.QueryEvents(storage.EventControl, 10, 0)
 	if len(got) != 1 || got[0].Actor != "" {
 		t.Fatalf("expected one event with empty actor, got %+v", got)
 	}
@@ -66,8 +66,8 @@ func TestGetAuditHandler_NewestFirstWithLimit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupHandlerStore(t)
 	for i := int64(1); i <= 5; i++ {
-		if err := storage.AppendAuditEvent(storage.AuditEvent{
-			TimeUnixNano: i * 1000, Actor: "a", Action: "act", Target: "t",
+		if err := storage.AppendEvent(storage.Event{
+			TimeUnixNano: i * 1000, Category: storage.EventControl, Actor: "a", Op: "act", Target: "t",
 		}); err != nil {
 			t.Fatal(err)
 		}

@@ -65,6 +65,9 @@ func setupHandlerStore(t *testing.T) {
 	if err := storage.InitUserStore(fmt.Sprintf("users-%d.db", time.Now().UnixNano())); err != nil {
 		t.Fatalf("InitUserStore: %v", err)
 	}
+	if err := storage.InitEventStore(fmt.Sprintf("logs-%d.db", time.Now().UnixNano())); err != nil {
+		t.Fatalf("InitEventStore: %v", err)
+	}
 }
 
 func doReq(r *gin.Engine, method, path, body string) *httptest.ResponseRecorder {

@@ -29,12 +29,6 @@ const (
 	fixtureC2xx       uint32 = 17
 	fixtureC4xx       uint32 = 3
 	fixtureC5xx       uint32 = 1
-
-	fixtureAuditNano   int64 = 1700000000000000000
-	fixtureAuditActor        = "admin"
-	fixtureAuditAction       = "user.create"
-	fixtureAuditTarget       = fixtureAccessKey
-	fixtureAuditDetail       = "seed"
 )
 
 // copyFile copies src to dst, failing the test on any error. Used both by the
@@ -141,16 +135,8 @@ func TestLegacyBoltFileOpensUnderCurrentImpl(t *testing.T) {
 			fixtureMinuteUnix, fixtureC2xx, fixtureC4xx, fixtureC5xx)
 	}
 
-	// AuditLog bucket: NextSequence-suffixed key + JSON value read back.
-	events, err := QueryAuditEvents(10, 0)
-	if err != nil {
-		t.Fatalf("QueryAuditEvents: %v", err)
-	}
-	if len(events) != 1 {
-		t.Fatalf("got %d audit events, want 1", len(events))
-	}
-	if e := events[0]; e.TimeUnixNano != fixtureAuditNano || e.Actor != fixtureAuditActor ||
-		e.Action != fixtureAuditAction || e.Target != fixtureAuditTarget || e.Detail != fixtureAuditDetail {
-		t.Fatalf("audit event = %+v, want seeded values", e)
-	}
+	// The control-plane audit trail no longer lives in users.db (it moved to
+	// logs.db, see events.go), so the legacy file's AuditLog bucket is abandoned
+	// by design and is not asserted here. The migration guard still covers every
+	// bucket that remains in users.db: Users, Config, RequestSamples.
 }

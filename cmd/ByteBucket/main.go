@@ -34,6 +34,15 @@ const shutdownTimeout = 30 * time.Second
 // finer resolution would ever be displayed.
 const requestSampleInterval = time.Minute
 
+// Access-log flush cadence. A data event becomes durable within at most
+// eventFlushInterval, or sooner once a batch reaches eventFlushMaxBatch. The
+// pair bounds both write amplification (one fsync per batch) and worst-case
+// visibility latency, keeping the firehose off the request path.
+const (
+	eventFlushInterval = 250 * time.Millisecond
+	eventFlushMaxBatch = 500
+)
+
 // Per-server I/O bounds. These are deliberately conservative for a first pass:
 //
 //   - readHeaderTimeout: 10s is well above any well-behaved client and caps
@@ -232,6 +241,12 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	// The unified event log (control-plane audit + data-plane access) lives in
+	// its own file so the access firehose never threatens the auth store.
+	if err := storage.InitEventStore("/data/logs.db"); err != nil {
+		return err
+	}
+
 	if err := bootstrapSuperUser(); err != nil {
 		return err
 	}
@@ -265,6 +280,24 @@ func run(ctx context.Context) error {
 	}
 	slog.Info("request-sample retention", "days", retDays)
 	go sampler.Run(ctx, requestSampleInterval, middleware.S3RequestOutcomes, handlers.RequestRetentionDays)
+
+	// Data-plane access log: OFF by default. ACCESS_LOG_ENABLED seeds the master
+	// switch; MAX_EVENTS/MAX_AGE_DAYS seed the retention caps over the built-in
+	// defaults. A persisted runtime override (admin settings UI) wins and
+	// survives restarts. The flusher drains the buffered events into logs.db in
+	// batches off the request path; it stops when ctx cancels, draining the last
+	// partial batch first.
+	storage.SetAccessLogEnabled(parseBoolEnv("ACCESS_LOG_ENABLED"))
+	storage.SetAccessLogMaxEvents(parseIntEnvDefault("ACCESS_LOG_MAX_EVENTS", storage.AccessLogMaxEvents()))
+	storage.SetAccessLogMaxAge(time.Duration(parseIntEnvDefault("ACCESS_LOG_MAX_AGE_DAYS",
+		int(storage.AccessLogMaxAge()/(24*time.Hour)))) * 24 * time.Hour)
+	accessCfg, err := handlers.InitAccessLogFromStore()
+	if err != nil {
+		return err
+	}
+	slog.Info("data-plane access log", "enabled", accessCfg.Enabled,
+		"max_events", accessCfg.MaxEvents, "max_age_days", accessCfg.MaxAgeDays)
+	go storage.RunEventFlusher(ctx, eventFlushInterval, eventFlushMaxBatch)
 
 	// Request rate limiting is opt-in and OFF by default; the environment
 	// seeds a baseline (see loadRateLimitConfig for the env contract). The
@@ -354,6 +387,26 @@ func parseBoolEnvDefault(key string, def bool) bool {
 	return v
 }
 
+// malformedEnvMsg is logged when a numeric env var fails to parse, so a typo is
+// visible rather than silently swallowed.
+const malformedEnvMsg = "ignoring malformed env value"
+
+// parseIntEnvDefault reads an integer env var, returning def when the value is
+// empty or malformed. Used for tunables whose absence must keep the built-in
+// default rather than collapse to zero, unlike parseIntEnv's deny-by-default 0.
+func parseIntEnvDefault(key string, def int) int {
+	s := strings.TrimSpace(os.Getenv(key))
+	if s == "" {
+		return def
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		slog.Warn(malformedEnvMsg, "key", key, "value", s)
+		return def
+	}
+	return v
+}
+
 // parseFloatEnv reads a float env var, returning 0 on empty/malformed input
 // and logging the bad value so a typo is visible rather than silent.
 func parseFloatEnv(key string) float64 {
@@ -363,7 +416,7 @@ func parseFloatEnv(key string) float64 {
 	}
 	v, err := strconv.ParseFloat(s, 64)
 	if err != nil {
-		slog.Warn("ignoring malformed env value", "key", key, "value", s)
+		slog.Warn(malformedEnvMsg, "key", key, "value", s)
 		return 0
 	}
 	return v
@@ -378,7 +431,7 @@ func parseIntEnv(key string) int {
 	}
 	v, err := strconv.Atoi(s)
 	if err != nil {
-		slog.Warn("ignoring malformed env value", "key", key, "value", s)
+		slog.Warn(malformedEnvMsg, "key", key, "value", s)
 		return 0
 	}
 	return v

@@ -83,11 +83,9 @@ func InitUserStore(fileName string) error {
 		if _, err := tx.CreateBucketIfNotExists([]byte(requestSamplesBucket)); err != nil {
 			return err
 		}
-		// AuditLog holds the control-plane audit trail (admin mutations). Same
-		// file as the other buckets so there is one durable store to back up.
-		if _, err := tx.CreateBucketIfNotExists([]byte(auditBucket)); err != nil {
-			return err
-		}
+		// The control-plane audit trail and the data-plane access log live in
+		// their own logs.db (see events.go), not here, so the access firehose's
+		// growth never threatens the auth store.
 		log.Println("User store initialized at", dbPath)
 		return nil
 	})

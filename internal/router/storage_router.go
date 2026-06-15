@@ -36,6 +36,10 @@ func NewStorageRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 	// excludes /health), unlike the admin surface where only /api/s3 qualifies.
 	r.Use(middleware.S3RequestOutcome())
 
+	// Data-plane access log. Same data-plane scope as S3RequestOutcome; a no-op
+	// (one atomic load) when access logging is disabled.
+	r.Use(middleware.AccessLog())
+
 	// Rate limiting runs after Log/Metrics so a throttled request is still
 	// observed and ID-tagged, but BEFORE auth and CORS so an unauthenticated
 	// flood is rejected before reaching signature verification and filesystem

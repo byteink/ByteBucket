@@ -21,6 +21,10 @@ const syncWritesConfigPath = "/config/sync"
 // (in days), registered for GET/PUT below.
 const retentionConfigPath = "/config/retention"
 
+// accessLogConfigPath is the admin API subpath for the data-plane access-log
+// config (enable + retention), registered for GET/PUT below.
+const accessLogConfigPath = "/config/accesslog"
+
 // NewAdminRouter initializes the routes for admin operations.
 //
 // The embedded admin SPA is served at / (and any unknown path) without auth;
@@ -79,8 +83,11 @@ func NewAdminRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 		api.GET("/stats", handlers.GetStatsHandler)
 		api.GET("/stats/requests", handlers.GetRequestSeriesHandler)
 		api.GET("/audit", handlers.GetAuditHandler)
+		api.GET("/logs", handlers.GetLogsHandler)
 		api.GET(retentionConfigPath, handlers.GetRetentionHandler)
 		api.PUT(retentionConfigPath, handlers.PutRetentionHandler)
+		api.GET(accessLogConfigPath, handlers.GetAccessLogHandler)
+		api.PUT(accessLogConfigPath, handlers.PutAccessLogHandler)
 		api.GET(rateLimitConfigPath, handlers.GetRateLimitHandler)
 		api.PUT(rateLimitConfigPath, handlers.PutRateLimitHandler)
 		api.DELETE(rateLimitConfigPath, handlers.DeleteRateLimitHandler)
@@ -102,6 +109,7 @@ func NewAdminRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 		// asset fetches never pollute the 2xx/4xx/5xx view.
 		s3 := api.Group("/s3")
 		s3.Use(middleware.S3RequestOutcome())
+		s3.Use(middleware.AccessLog())
 		RegisterStorageRoutes(s3)
 	}
 
