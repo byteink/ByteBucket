@@ -239,6 +239,47 @@ func TestRunEventFlusher_DrainsOnShutdown(t *testing.T) {
 	}
 }
 
+// A running flusher writes buffered events on the interval tick (not only on
+// shutdown), exercising the live select loop.
+func TestRunEventFlusher_FlushesOnTick(t *testing.T) {
+	setupEventStore(t)
+	SetAccessLogEnabled(true)
+	SetAccessLogMaxAge(0) // synthetic timestamp; isolate from the age cap
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		RunEventFlusher(ctx, 10*time.Millisecond, 500)
+		close(done)
+	}()
+	EnqueueEvent(Event{TimeUnixNano: 1, Category: EventData, Op: "GetObject"})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got, _ := QueryEvents(EventData, 10, 0); len(got) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	if got, _ := QueryEvents(EventData, 10, 0); len(got) != 1 {
+		t.Fatalf("ticker flush wrote %d events, want 1", len(got))
+	}
+}
+
+func TestAccessLogEnabled_ReflectsSetter(t *testing.T) {
+	setupEventStore(t)
+	SetAccessLogEnabled(true)
+	if !AccessLogEnabled() {
+		t.Fatal("AccessLogEnabled() = false after enabling")
+	}
+	SetAccessLogEnabled(false)
+	if AccessLogEnabled() {
+		t.Fatal("AccessLogEnabled() = true after disabling")
+	}
+}
+
 func TestAccessLogSettings_Clamp(t *testing.T) {
 	setupEventStore(t)
 	SetAccessLogMaxEvents(-1)
