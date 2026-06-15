@@ -1,8 +1,17 @@
 # Design: unified event log (access + audit) — consolidate observability
 
-Status: APPROVED (2026-06-15) — ready to build. Supersedes the standalone "object
-access log" idea and folds the existing control-plane audit log into one event store.
-Open decisions are now locked (see Decisions section).
+Status: IMPLEMENTED (2026-06-15). Shipped in storage/events.go, middleware/
+accesslog.go, handlers/{logs,accesslog}.go, the unified web Logs page, plus E2E +
+pentest. Supersedes the standalone "object access log" idea and folds the former
+control-plane audit log into one event store.
+
+Two refinements made during the build (both improve on the original note):
+  - Two buckets, not one. EventControl (count-capped, always on) and EventData
+    (count+age capped, opt-in) in logs.db, so an access-log flood can never evict
+    audit history. The "one EventLog bucket" idea would have shared a single cap.
+  - Sync control, async data. Control events use a synchronous AppendEvent (rare,
+    must be queryable the instant an admin action returns); data events use the
+    batched async path. One write API shape, two cadences matched to each load.
 
 ## Problem
 

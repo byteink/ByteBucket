@@ -119,7 +119,7 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
 
 ## Phase B — observability consolidation (design ready)
 
-### B1. Unified event log (access + audit) — APPROVED, ready to build. See `notes/access-log-design.md`.
+### B1. Unified event log (access + audit) — DONE (2026-06-15). See `notes/access-log-design.md`.
 - Collapses 5 sprawling observability surfaces into 2 pillars: metrics (Prometheus +
   RequestSamples, unchanged) and events (one BoltDB log + stdout tee).
 - Folds the existing control-plane audit (A5) and the missing data-plane access log
@@ -244,3 +244,16 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   Decisions locked same day: EventLog bucket in own logs.db, count+age retention
   (no size cap), fold audit now (keep /api/audit as category=control alias).
   APPROVED, ready to build.
+- 2026-06-15: Phase B1 unified event log DONE. storage/events.go — two buckets
+  (EventControl count-capped always-on; EventData count+age capped opt-in) so an
+  access flood can't evict audit history; sync AppendEvent for control, batched
+  async flusher for data off the request path (drops-and-counts under
+  backpressure). middleware.AccessLog captures data-plane events (s3Operation
+  classifier + error code + stdout tee). GET /api/logs?category=, GET/PUT
+  /api/config/accesslog (ACCESS_LOG_* env + persisted UI override); /api/audit
+  kept as a control alias. Folded the former users.db AuditLog into logs.db
+  (removed storage/audit.go). Web: one Logs page (Access/Control tabs) replaces
+  the Audit page; access-log controls in Settings. Unit + E2E (real S3 ops, polls
+  flusher) + pentest (251, +14) + browser E2E (13). Query strings/credentials
+  never recorded.
+  REMAINING: A6 visual ACL matrix, Phase 3 versioning.
