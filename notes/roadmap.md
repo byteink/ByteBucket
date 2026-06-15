@@ -117,6 +117,26 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
 ### A7. Upload (drag-drop) + multi-select delete — DONE (2026-06-07). Upload pre-existed; added batch delete.
 ### A8. Copy / move / rename — DONE (2026-06-07). copyObject client + Rename (copy+delete) action.
 
+## Phase B — observability consolidation (design ready)
+
+### B1. Unified event log (access + audit) — APPROVED, ready to build. See `notes/access-log-design.md`.
+- Collapses 5 sprawling observability surfaces into 2 pillars: metrics (Prometheus +
+  RequestSamples, unchanged) and events (one BoltDB log + stdout tee).
+- Folds the existing control-plane audit (A5) and the missing data-plane access log
+  into ONE `Event{category: control|data}` store — one schema, one read API, one UI.
+- Data-plane gap this closes: per-object access record (who did GetObject/PutObject/
+  DeleteObject on which key, status, IP) — the "NOT per-object PUT/DELETE" scope note
+  on A5. This is the data-plane successor to A5.
+- Storage: reuse audit's nano+seq BoltDB pattern, but in its own `logs.db`, with
+  BATCHED async writes (flush N per txn off the hot path — non-negotiable for
+  overhead) and compaction-aware retention (Bolt doesn't shrink on delete).
+- stdout tee gives the AI/ssh investigation path (`kubectl logs | jq`) + a curl-able
+  `GET /api/logs?category=` for historical. No new file/lumberjack machinery.
+- Config: ACCESS_LOG_ENABLED / MAX_EVENTS / MAX_AGE, env + Settings override.
+- Decisions locked (2026-06-15): bucket `EventLog` in own `logs.db`; retention =
+  count + age cap (no size cap); fold audit into the unified store now, keep
+  /api/audit as a category=control alias. See design note.
+
 ## Phase 3 — feature depth (only with a real need)
 
 - **Versioning** — version IDs, list versions, delete markers (large lift)
@@ -216,3 +236,11 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   inline (was stale "deferred"), added Phase 0 DONE marker, refreshed the
   baseline "Current state" list. REMAINING unchanged: A6 visual ACL matrix,
   Phase 3 (versioning / bucket policy / extra checksums).
+- 2026-06-15: Phase B1 unified event log DESIGNED (notes/access-log-design.md).
+  Decided to consolidate observability sprawl (5 surfaces) into 2 pillars rather
+  than add a 6th. Access log + audit become ONE BoltDB event store (category:
+  control|data) reusing the audit pattern, in its own logs.db, batched async
+  writes, stdout tee for ssh/AI grep. No file/lumberjack stack. Successor to A5.
+  Decisions locked same day: EventLog bucket in own logs.db, count+age retention
+  (no size cap), fold audit now (keep /api/audit as category=control alias).
+  APPROVED, ready to build.
