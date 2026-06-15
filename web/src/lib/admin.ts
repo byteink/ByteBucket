@@ -199,24 +199,72 @@ export async function getRequestSeries(
   return (await res.json()) as RequestSeries;
 }
 
-// AuditEvent is one recorded control-plane mutation.
-export interface AuditEvent {
+export type LogCategory = 'control' | 'data';
+
+// LogEvent is one record in the unified event log. Control events carry
+// op/target/detail; data (access) events carry op/bucket/key/status and the
+// request envelope. The server omits the fields irrelevant to each category.
+export interface LogEvent {
   ts: number; // unix nano; pagination cursor
   time: string; // RFC3339
-  actor: string;
-  action: string;
-  target: string;
-  detail: string;
+  category: LogCategory;
+  actor?: string;
+  op: string;
+  target?: string;
+  bucket?: string;
+  key?: string;
+  status?: number;
+  errorCode?: string;
+  clientIp?: string;
+  bytesIn?: number;
+  bytesOut?: number;
+  durationMs?: number;
+  userAgent?: string;
+  detail?: string;
 }
 
-// getAudit returns recent audit events newest-first. Pass `before` (the ts of
-// the oldest event already shown) to page into older entries.
-export async function getAudit(s: Session, limit = 50, before?: number): Promise<AuditEvent[]> {
-  const params = new URLSearchParams({ limit: String(limit) });
+// getLogs returns recent events of one category newest-first. Pass `before`
+// (the ts of the oldest event already shown) to page into older entries.
+export async function getLogs(
+  s: Session,
+  category: LogCategory,
+  limit = 50,
+  before?: number,
+): Promise<LogEvent[]> {
+  const params = new URLSearchParams({ category, limit: String(limit) });
   if (before) params.set('before', String(before));
-  const res = await fetch(`/api/audit?${params.toString()}`, { headers: authHeaders(s) });
+  const res = await fetch(`/api/logs?${params.toString()}`, { headers: authHeaders(s) });
   if (!res.ok) throw new Error(await parseError(res));
-  return ((await res.json()) as { events: AuditEvent[] }).events ?? [];
+  return ((await res.json()) as { events: LogEvent[] }).events ?? [];
+}
+
+// Admin API subpath for the data-plane access-log config (GET/PUT).
+const ACCESS_LOG_PATH = '/api/config/accesslog';
+
+// AccessLogConfig is the data-plane access-log master switch plus its retention
+// caps (count and age). maxEvents/maxAgeDays of 0 disable that cap.
+export interface AccessLogConfig {
+  enabled: boolean;
+  maxEvents: number;
+  maxAgeDays: number;
+}
+
+// getAccessLog returns the effective access-log config.
+export async function getAccessLog(s: Session): Promise<AccessLogConfig> {
+  const res = await fetch(ACCESS_LOG_PATH, { headers: authHeaders(s) });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as AccessLogConfig;
+}
+
+// putAccessLog sets and persists the access-log config, returning the clamped value.
+export async function putAccessLog(s: Session, cfg: AccessLogConfig): Promise<AccessLogConfig> {
+  const res = await fetch(ACCESS_LOG_PATH, {
+    method: 'PUT',
+    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as AccessLogConfig;
 }
 
 // Admin API subpath for the request-sample retention setting (GET/PUT).

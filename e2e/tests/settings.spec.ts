@@ -29,7 +29,8 @@ test.describe('settings', () => {
 
   test('metrics retention saves and reports the new window', async ({ page }) => {
     const days = page.getByLabel('Retention (days)');
-    const save = page.getByRole('button', { name: 'Save', exact: true });
+    // Scope to this field's own Save button — the Access log section adds another.
+    const save = days.locator('xpath=following::button[1]');
 
     await days.fill('14');
     await save.click();

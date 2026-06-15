@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react';
 import {
   deleteRateLimit,
+  getAccessLog,
   getRateLimit,
   getRetention,
   getSyncWrites,
+  putAccessLog,
   putRateLimit,
   putRetention,
   putSyncWrites,
+  type AccessLogConfig,
   type RateLimitConfig,
   type RateLimitState,
 } from '../lib/admin';
@@ -24,6 +27,8 @@ export default function SettingsPage() {
   const [syncBusy, setSyncBusy] = useState(false);
   const [retentionDays, setRetentionDays] = useState<number | null>(null);
   const [retentionBusy, setRetentionBusy] = useState(false);
+  const [accessLog, setAccessLog] = useState<AccessLogConfig | null>(null);
+  const [accessBusy, setAccessBusy] = useState(false);
 
   useEffect(() => {
     if (!session) return;
@@ -39,9 +44,32 @@ export default function SettingsPage() {
     getRetention(session)
       .then(setRetentionDays)
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    getAccessLog(session)
+      .then(setAccessLog)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
     // session is read once from localStorage; refetching on its identity would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function patchAccess(p: Partial<AccessLogConfig>) {
+    setAccessLog((f) => (f ? { ...f, ...p } : f));
+  }
+
+  async function onSaveAccessLog() {
+    if (!session || !accessLog) return;
+    setError(null);
+    setNotice(null);
+    setAccessBusy(true);
+    try {
+      const saved = await putAccessLog(session, accessLog);
+      setAccessLog(saved);
+      setNotice(saved.enabled ? 'Access logging enabled.' : 'Access logging disabled.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAccessBusy(false);
+    }
+  }
 
   async function onSaveRetention(days: number) {
     if (!session) return;
@@ -219,6 +247,49 @@ export default function SettingsPage() {
           <p className="text-xs text-ink-500 mt-2">
             How long the dashboard keeps per-minute request-outcome history for the 2xx/4xx/5xx
             chart. Older samples are pruned. Range 1–365 days.
+          </p>
+        </div>
+      )}
+
+      <div className="mb-2 mt-8 flex items-baseline justify-between">
+        <h3 className="text-sm">Access log</h3>
+      </div>
+      {accessLog === null ? (
+        <p className="text-ink-500 text-sm">Loading.</p>
+      ) : (
+        <div className="border border-ink-200 p-4 max-w-md space-y-4">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={accessLog.enabled}
+              disabled={accessBusy}
+              onChange={(e) => patchAccess({ enabled: e.target.checked })}
+            />
+            <span>Record object access (data plane)</span>
+          </label>
+
+          <NumberField
+            label="Max events (0 = no count cap)"
+            value={accessLog.maxEvents}
+            step="1000"
+            min={0}
+            onChange={(v) => patchAccess({ maxEvents: Math.trunc(v) })}
+          />
+          <NumberField
+            label="Max age in days (0 = no age cap)"
+            value={accessLog.maxAgeDays}
+            step="1"
+            min={0}
+            onChange={(v) => patchAccess({ maxAgeDays: Math.trunc(v) })}
+            hint="Range 0–365. Both caps apply; whichever is hit first prunes."
+          />
+
+          <button className="btn-primary h-8 px-3 text-xs" disabled={accessBusy} onClick={onSaveAccessLog}>
+            {accessBusy ? 'Saving' : 'Save'}
+          </button>
+          <p className="text-xs text-ink-500">
+            Logs every object read, write, and delete (who, which key, status) to the unified log,
+            viewable under Logs. Off by default; the firehose is written off the request path.
           </p>
         </div>
       )}

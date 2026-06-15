@@ -9,7 +9,7 @@ import ObjectsPage from './pages/ObjectsPage';
 import ObjectDetailPage from './pages/ObjectDetailPage';
 import BucketCORSPage from './pages/BucketCORSPage';
 import SettingsPage from './pages/SettingsPage';
-import AuditPage from './pages/AuditPage';
+import LogsPage from './pages/LogsPage';
 
 export default function App() {
   return (
@@ -29,7 +29,7 @@ export default function App() {
         <Route path="/buckets/:name/objects/*" element={<ObjectDetailPage />} />
         <Route path="/buckets/:name/cors" element={<BucketCORSPage />} />
         <Route path="/users" element={<UsersPage />} />
-        <Route path="/audit" element={<AuditPage />} />
+        <Route path="/logs" element={<LogsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
