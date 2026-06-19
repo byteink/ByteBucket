@@ -23,63 +23,69 @@ function tabClass(active: boolean): string {
   }`;
 }
 
-function DataTable({ events }: { events: LogEvent[] }) {
+function DataTable({ events }: Readonly<{ events: LogEvent[] }>) {
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className="text-left border-b border-ink-200 text-ink-500">
-          <th className="table-cell font-normal w-44">Time</th>
-          <th className="table-cell font-normal">Operation</th>
-          <th className="table-cell font-normal">Bucket</th>
-          <th className="table-cell font-normal">Key</th>
-          <th className="table-cell font-normal">Actor</th>
-          <th className="table-cell font-normal w-16">Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {events.map((e) => (
-          <tr key={e.ts} className="border-b border-ink-100">
-            <td className="table-cell text-ink-500 text-xs font-mono">{fmtTime(e.time)}</td>
-            <td className="table-cell text-xs">{e.op}</td>
-            <td className="table-cell text-ink-500 text-xs font-mono break-all">{e.bucket || '—'}</td>
-            <td className="table-cell text-ink-500 text-xs font-mono break-all">{e.key || '—'}</td>
-            <td className="table-cell text-ink-500 text-xs font-mono break-all">{e.actor || '—'}</td>
-            <td
-              className={`table-cell text-xs font-mono ${
-                (e.status ?? 0) >= 400 ? 'text-danger' : 'text-ink-500'
-              }`}
-            >
-              {e.status || '—'}
-            </td>
+    <div className="overflow-x-auto">
+      <table className="text-sm whitespace-nowrap">
+        <thead>
+          <tr className="text-left border-b border-ink-200 text-ink-500">
+            <th className="table-cell font-normal">Time</th>
+            <th className="table-cell font-normal">IP</th>
+            <th className="table-cell font-normal">Operation</th>
+            <th className="table-cell font-normal">Bucket</th>
+            <th className="table-cell font-normal">Actor</th>
+            <th className="table-cell font-normal">Status</th>
+            <th className="table-cell font-normal">Key</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {events.map((e) => (
+            <tr key={e.ts} className="border-b border-ink-100">
+              <td className="table-cell text-ink-500 text-xs font-mono">{fmtTime(e.time)}</td>
+              <td className="table-cell text-ink-500 text-xs font-mono">{e.clientIp || '—'}</td>
+              <td className="table-cell text-xs">{e.op}</td>
+              <td className="table-cell text-ink-500 text-xs font-mono">{e.bucket || '—'}</td>
+              <td className="table-cell text-ink-500 text-xs font-mono">{e.actor || '—'}</td>
+              <td
+                className={`table-cell text-xs font-mono ${
+                  (e.status ?? 0) >= 400 ? 'text-danger' : 'text-ink-500'
+                }`}
+              >
+                {e.status || '—'}
+              </td>
+              <td className="table-cell text-ink-500 text-xs font-mono">{e.key || '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
-function ControlTable({ events }: { events: LogEvent[] }) {
+function ControlTable({ events }: Readonly<{ events: LogEvent[] }>) {
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className="text-left border-b border-ink-200 text-ink-500">
-          <th className="table-cell font-normal w-44">Time</th>
-          <th className="table-cell font-normal">Action</th>
-          <th className="table-cell font-normal">Target</th>
-          <th className="table-cell font-normal">Actor</th>
-        </tr>
-      </thead>
-      <tbody>
-        {events.map((e) => (
-          <tr key={e.ts} className="border-b border-ink-100">
-            <td className="table-cell text-ink-500 text-xs font-mono">{fmtTime(e.time)}</td>
-            <td className="table-cell text-xs">{e.op}</td>
-            <td className="table-cell text-ink-500 text-xs font-mono break-all">{e.target || '—'}</td>
-            <td className="table-cell text-ink-500 text-xs font-mono break-all">{e.actor || '—'}</td>
+    <div className="overflow-x-auto">
+      <table className="text-sm whitespace-nowrap">
+        <thead>
+          <tr className="text-left border-b border-ink-200 text-ink-500">
+            <th className="table-cell font-normal">Time</th>
+            <th className="table-cell font-normal">Action</th>
+            <th className="table-cell font-normal">Target</th>
+            <th className="table-cell font-normal">Actor</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {events.map((e) => (
+            <tr key={e.ts} className="border-b border-ink-100">
+              <td className="table-cell text-ink-500 text-xs font-mono">{fmtTime(e.time)}</td>
+              <td className="table-cell text-xs">{e.op}</td>
+              <td className="table-cell text-ink-500 text-xs font-mono">{e.target || '—'}</td>
+              <td className="table-cell text-ink-500 text-xs font-mono">{e.actor || '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
