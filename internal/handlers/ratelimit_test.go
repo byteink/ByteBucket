@@ -171,3 +171,27 @@ func TestRateLimitEndpoints(t *testing.T) {
 		t.Fatalf("override present after delete: %+v", s.Override)
 	}
 }
+
+// TestInitRateLimitAppliesPersistedOverride proves a persisted override is
+// applied to the live controller at startup, so a runtime setting survives a
+// restart.
+func TestInitRateLimitAppliesPersistedOverride(t *testing.T) {
+	setupHandlerStore(t)
+	base := middleware.RateLimitConfig{Enabled: false, RPS: 1, Burst: 1}
+	ctrl := middleware.NewRateLimitController(base)
+	SetRateLimitController(ctrl, base)
+
+	if err := storage.PutConfigValue(rateLimitConfigKey, []byte(`{"enabled":true,"rps":9,"burst":4}`)); err != nil {
+		t.Fatalf("seed override: %v", err)
+	}
+	eff, err := InitRateLimitFromStore()
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if !eff.Enabled || eff.RPS != 9 || eff.Burst != 4 {
+		t.Fatalf("init applied = %+v, want persisted override", eff)
+	}
+	if got := ctrl.Current(); !got.Enabled || got.RPS != 9 || got.Burst != 4 {
+		t.Fatalf("controller not updated by init: %+v", got)
+	}
+}
