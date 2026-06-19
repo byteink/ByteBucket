@@ -21,6 +21,7 @@ type logEvent struct {
 	Bucket   string `json:"bucket"`
 	Key      string `json:"key"`
 	Status   int    `json:"status"`
+	ClientIP string `json:"clientIp"`
 	Time     string `json:"time"`
 }
 
@@ -65,6 +66,71 @@ func setAccessLog(t *testing.T, enabled bool) {
 	}
 	if status, b := adminJSON(t, http.MethodPut, "/api/config/accesslog", body); status != http.StatusOK {
 		t.Fatalf("set access log enabled=%v: %d %s", enabled, status, b)
+	}
+}
+
+func setTrustedProxy(t *testing.T, body string) {
+	t.Helper()
+	if status, b := adminJSON(t, http.MethodPut, "/api/config/trustedproxy", body); status != http.StatusOK {
+		t.Fatalf("set trusted proxy %s: %d %s", body, status, b)
+	}
+}
+
+// TestE2E_TrustedProxyIPCapture proves the end-to-end vendor-header path: with
+// CF-Connecting-IP trusted, an S3 request carrying that header is logged with
+// the client IP it names (not the socket peer), and the whoami validation
+// endpoint resolves and reports the same address with the detected header.
+func TestE2E_TrustedProxyIPCapture(t *testing.T) {
+	setTrustedProxy(t, `{"headers":["CF-Connecting-IP"],"useLeftmostIP":false}`)
+	setAccessLog(t, true)
+	t.Cleanup(func() {
+		setAccessLog(t, false)
+		setTrustedProxy(t, `{"headers":[],"useLeftmostIP":false}`)
+	})
+
+	client := createS3Client(adminCreds.AccessKeyID, adminCreds.SecretAccessKey)
+	const bucket = "trustedproxy-e2e"
+	const key = "probe/ip.txt"
+	if _, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	if _, err := client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket: aws.String(bucket), Key: aws.String(key), Body: strings.NewReader("ip capture"),
+	}); err != nil {
+		t.Fatalf("put object: %v", err)
+	}
+
+	// A signed GET carrying the trusted vendor header. The header is unsigned
+	// (not in SignedHeaders), which SigV4 permits, so it reaches the server
+	// untouched and the access log must resolve the client from it.
+	resp := sigV4Do(t, http.MethodGet, "/"+bucket+"/"+key, nil, map[string]string{"CF-Connecting-IP": "9.9.9.9"})
+	_ = readAllClose(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("signed GET status %d, want 200", resp.StatusCode)
+	}
+
+	got := waitForDataEvent(t, "GetObject", bucket, key)
+	if got.ClientIP != "9.9.9.9" {
+		t.Fatalf("logged clientIp = %q, want 9.9.9.9 (trusted CF-Connecting-IP)", got.ClientIP)
+	}
+
+	// The whoami validation endpoint resolves the same request the same way.
+	who := adminRequest(t, http.MethodGet, "/api/whoami", nil, "")
+	who.Header.Set("CF-Connecting-IP", "9.9.9.9")
+	wResp := adminDo(t, who)
+	wBody := readAllClose(t, wResp)
+	if wResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/whoami: %d body %s", wResp.StatusCode, wBody)
+	}
+	var w struct {
+		IP             string `json:"ip"`
+		DetectedHeader string `json:"detectedHeader"`
+	}
+	if err := json.Unmarshal(wBody, &w); err != nil {
+		t.Fatalf("decode whoami: %v body=%s", err, wBody)
+	}
+	if w.IP != "9.9.9.9" || w.DetectedHeader != "CF-Connecting-IP" {
+		t.Fatalf("whoami = %+v, want ip 9.9.9.9 via CF-Connecting-IP", w)
 	}
 }
 

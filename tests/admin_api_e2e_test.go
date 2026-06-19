@@ -176,7 +176,7 @@ func TestE2E_AdminRateLimitConfig(t *testing.T) {
 
 	// Persist an override (disabled, distinctive rps) and confirm it becomes effective.
 	status, _ = adminJSON(t, http.MethodPut, "/api/config/ratelimit",
-		`{"enabled":false,"rps":7,"burst":9,"trustedProxies":1}`)
+		`{"enabled":false,"rps":7,"burst":9}`)
 	if status != http.StatusOK {
 		t.Fatalf("PUT ratelimit: %d", status)
 	}

@@ -50,7 +50,7 @@ func AccessLog() gin.HandlerFunc {
 			Key:          strings.TrimPrefix(c.Param("objectKey"), "/"),
 			Status:       c.Writer.Status(),
 			ErrorCode:    contextString(c, ErrorCodeContextKey),
-			ClientIP:     c.ClientIP(),
+			ClientIP:     ResolveClientIP(c.Request),
 			BytesIn:      c.Request.ContentLength,
 			BytesOut:     int64(c.Writer.Size()),
 			DurationMs:   float64(time.Since(start).Microseconds()) / 1000.0,

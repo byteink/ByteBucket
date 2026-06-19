@@ -25,6 +25,10 @@ const retentionConfigPath = "/config/retention"
 // config (enable + retention), registered for GET/PUT below.
 const accessLogConfigPath = "/config/accesslog"
 
+// trustedProxyConfigPath is the admin API subpath for the trusted-proxy
+// client-IP resolution config, registered for GET/PUT below.
+const trustedProxyConfigPath = "/config/trustedproxy"
+
 // NewAdminRouter initializes the routes for admin operations.
 //
 // The embedded admin SPA is served at / (and any unknown path) without auth;
@@ -84,6 +88,9 @@ func NewAdminRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 		api.GET("/stats/requests", handlers.GetRequestSeriesHandler)
 		api.GET("/audit", handlers.GetAuditHandler)
 		api.GET("/logs", handlers.GetLogsHandler)
+		api.GET("/whoami", handlers.GetWhoAmIHandler)
+		api.GET(trustedProxyConfigPath, handlers.GetTrustedProxyHandler)
+		api.PUT(trustedProxyConfigPath, handlers.PutTrustedProxyHandler)
 		api.GET(retentionConfigPath, handlers.GetRetentionHandler)
 		api.PUT(retentionConfigPath, handlers.PutRetentionHandler)
 		api.GET(accessLogConfigPath, handlers.GetAccessLogHandler)

@@ -19,9 +19,8 @@ const rateLimitConfigKey = "ratelimit"
 // input (negatives, NaN/Inf, values that would overflow the limiter or grow
 // per-request work). trustedProxies is capped at a sane chain depth.
 const (
-	maxRateLimitRPS     = 1_000_000
-	maxRateLimitBurst   = 1_000_000
-	maxRateLimitProxies = 64
+	maxRateLimitRPS   = 1_000_000
+	maxRateLimitBurst = 1_000_000
 )
 
 // rlController is the live controller shared by both HTTP surfaces; rlEnv is
@@ -36,27 +35,24 @@ var (
 // is kept separate from middleware.RateLimitConfig so the JSON contract is
 // owned here and the storage layer stays free of a middleware import.
 type rateLimitDTO struct {
-	Enabled        bool    `json:"enabled"`
-	RPS            float64 `json:"rps"`
-	Burst          int     `json:"burst"`
-	TrustedProxies int     `json:"trustedProxies"`
+	Enabled bool    `json:"enabled"`
+	RPS     float64 `json:"rps"`
+	Burst   int     `json:"burst"`
 }
 
 func (d rateLimitDTO) toConfig() middleware.RateLimitConfig {
 	return middleware.RateLimitConfig{
-		Enabled:        d.Enabled,
-		RPS:            d.RPS,
-		Burst:          d.Burst,
-		TrustedProxies: d.TrustedProxies,
+		Enabled: d.Enabled,
+		RPS:     d.RPS,
+		Burst:   d.Burst,
 	}
 }
 
 func dtoFromConfig(c middleware.RateLimitConfig) rateLimitDTO {
 	return rateLimitDTO{
-		Enabled:        c.Enabled,
-		RPS:            c.RPS,
-		Burst:          c.Burst,
-		TrustedProxies: c.TrustedProxies,
+		Enabled: c.Enabled,
+		RPS:     c.RPS,
+		Burst:   c.Burst,
 	}
 }
 
@@ -173,9 +169,6 @@ func validateRateLimit(d rateLimitDTO) string {
 	}
 	if d.Burst < 0 || d.Burst > maxRateLimitBurst {
 		return "burst out of range"
-	}
-	if d.TrustedProxies < 0 || d.TrustedProxies > maxRateLimitProxies {
-		return "trustedProxies out of range"
 	}
 	if d.Enabled && (d.RPS < 1 || d.Burst < 1) {
 		return "enabled limiting requires rps and burst of at least 1"

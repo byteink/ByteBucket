@@ -299,6 +299,17 @@ func run(ctx context.Context) error {
 		"max_events", accessCfg.MaxEvents, "max_age_days", accessCfg.MaxAgeDays)
 	go storage.RunEventFlusher(ctx, eventFlushInterval, eventFlushMaxBatch)
 
+	// Trusted-proxy client-IP resolution is server-wide infra shared by the rate
+	// limiter, access log and request log, so they all agree on who the client
+	// is. Seed the env baseline, then let any persisted admin override win (it
+	// survives restarts). Empty by default: trust no header, key on the peer.
+	storage.SetTrustedProxy(loadTrustedProxyConfig())
+	tpCfg, err := handlers.InitTrustedProxyFromStore()
+	if err != nil {
+		return err
+	}
+	slog.Info("trusted proxy", "headers", tpCfg.Headers, "use_leftmost_ip", tpCfg.UseLeftmostIP)
+
 	// Request rate limiting is opt-in and OFF by default; the environment
 	// seeds a baseline (see loadRateLimitConfig for the env contract). The
 	// controller is shared by both surfaces and is always installed — disabled
@@ -315,7 +326,7 @@ func run(ctx context.Context) error {
 	}
 	if eff.Enabled {
 		slog.Info("request rate limiting enabled",
-			"rps", eff.RPS, "burst", eff.Burst, "trusted_proxies", eff.TrustedProxies)
+			"rps", eff.RPS, "burst", eff.Burst)
 	}
 
 	storageSrv := newServer(":9000", withBodyLimit(router.NewStorageRouter(rlCtrl), storageBodyLimit))
@@ -339,12 +350,51 @@ func run(ctx context.Context) error {
 // down over, and the middleware clamps non-positive RPS/burst to safe floors.
 func loadRateLimitConfig() middleware.RateLimitConfig {
 	cfg := middleware.RateLimitConfig{
-		Enabled:        parseBoolEnv("RATE_LIMIT_ENABLED"),
-		RPS:            parseFloatEnv("RATE_LIMIT_RPS"),
-		Burst:          parseIntEnv("RATE_LIMIT_BURST"),
-		TrustedProxies: parseIntEnv("RATE_LIMIT_TRUSTED_PROXIES"),
+		Enabled: parseBoolEnv("RATE_LIMIT_ENABLED"),
+		RPS:     parseFloatEnv("RATE_LIMIT_RPS"),
+		Burst:   parseIntEnv("RATE_LIMIT_BURST"),
 	}
 	return cfg
+}
+
+// loadTrustedProxyConfig resolves the trusted-proxy environment baseline used to
+// extract the real client IP behind a reverse proxy. The admin UI may override
+// it at runtime (the override persists and wins). Empty headers means trust no
+// header — the socket peer is the client, the safe default for a server exposed
+// directly on the network.
+//
+//   - TRUSTED_PROXY_HEADERS (CSV, default empty) ordered header names trusted to
+//     carry the client IP, e.g. "CF-Connecting-IP,X-Forwarded-For". The first
+//     present header wins; for a multi-value header the rightmost entry is used.
+//   - TRUSTED_PROXY_USE_LEFTMOST_IP (bool, default false) read the leftmost
+//     rather than the safer rightmost entry of a multi-value header.
+//
+// Back-compat: the former RATE_LIMIT_TRUSTED_PROXIES integer is gone. A
+// deployment that set it (>0) sits behind a proxy and previously had its
+// X-Forwarded-For trusted, so seed that when no new header is configured — an
+// upgrade must not silently start logging and rate-limiting the proxy's address.
+func loadTrustedProxyConfig() storage.TrustedProxyConfig {
+	cfg := storage.TrustedProxyConfig{
+		Headers:       parseCSVEnv("TRUSTED_PROXY_HEADERS"),
+		UseLeftmostIP: parseBoolEnv("TRUSTED_PROXY_USE_LEFTMOST_IP"),
+	}
+	if len(cfg.Headers) == 0 && parseIntEnv("RATE_LIMIT_TRUSTED_PROXIES") > 0 {
+		cfg.Headers = []string{"X-Forwarded-For"}
+	}
+	return cfg
+}
+
+// parseCSVEnv splits a comma-separated env var into trimmed, non-empty entries,
+// preserving order. Empty or unset yields an empty slice.
+func parseCSVEnv(key string) []string {
+	raw := strings.Split(os.Getenv(key), ",")
+	out := make([]string, 0, len(raw))
+	for _, p := range raw {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // parseBoolEnv reads a boolean env var. Empty or malformed values are false,

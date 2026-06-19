@@ -41,10 +41,6 @@ type RateLimitConfig struct {
 	// Burst is the token-bucket depth: the largest instantaneous spike a
 	// single client may make before the sustained RPS rate gates them.
 	Burst int
-	// TrustedProxies is the number of reverse-proxy hops in front of this
-	// server. It selects which X-Forwarded-For entry is the real client; see
-	// clientIP for the (N+1)-th-from-the-right rationale.
-	TrustedProxies int
 }
 
 // Rate-limit store bounds. These are constants, not config, because the
@@ -215,61 +211,6 @@ func (rl *rateLimiter) close() {
 	close(rl.stop)
 }
 
-// clientIP resolves the real client address, honouring exactly trustedProxies
-// reverse-proxy hops in front of this server.
-//
-// Each proxy in a standard chain (nginx proxy_add_x_forwarded_for, traefik,
-// AWS ALB, ...) appends the address of the host it received the request FROM.
-// So the proxy directly connected to us records the previous hop in
-// X-Forwarded-For and appears itself only in the transport RemoteAddr — it is
-// NOT in XFF. That makes the nearest proxy the first of our trustedProxies
-// hops, with the remaining (trustedProxies-1) hops being the rightmost XFF
-// entries our infrastructure wrote. The genuine client is therefore the entry
-// immediately to their left: parts[len-trustedProxies].
-//
-// Counting from the right past exactly the hops we operate is what defeats the
-// classic evasion: an attacker can only PREPEND entries (everything left of
-// what our outermost trusted proxy appended), and prepending grows the list
-// without moving parts[len-trustedProxies]. Trusting the leftmost entry
-// instead (naive XFF[0]) would let a rotated spoof mint a fresh bucket per
-// request. This matches how Gin's ClientIP, Express' proxy-addr, and RFC 7239
-// resolve the client behind a known number of trusted hops.
-//
-// If the header has fewer than trustedProxies entries the request did not
-// traverse the expected chain; we trust no XFF entry and fall back to
-// RemoteAddr, which no client can forge. A selected entry that is not a valid
-// IP falls back the same way.
-func clientIP(r *http.Request, trustedProxies int) string {
-	remoteIP := remoteAddrIP(r)
-
-	if trustedProxies <= 0 {
-		// We sit directly on the network; the only trustworthy source is the
-		// socket peer. Ignore XFF entirely so a spoofed header cannot key the
-		// limiter.
-		return remoteIP
-	}
-
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff == "" {
-		return remoteIP
-	}
-
-	parts := splitTrim(xff)
-	// Fewer entries than hops means the chain was shorter than configured; do
-	// not guess — fall back to the socket peer. The nearest proxy is RemoteAddr
-	// (not in XFF), so a fully-traversed chain leaves at least trustedProxies
-	// entries here.
-	if len(parts) < trustedProxies {
-		return remoteIP
-	}
-
-	candidate := parts[len(parts)-trustedProxies]
-	if ip := net.ParseIP(candidate); ip != nil {
-		return ip.String()
-	}
-	return remoteIP
-}
-
 // remoteAddrIP extracts the bare IP from r.RemoteAddr ("ip:port"). On the rare
 // path where the address carries no port (synthetic requests in tests) the
 // raw value is returned. The result is only ever used as a limiter key, so a
@@ -355,7 +296,7 @@ func (rc *RateLimitController) Middleware() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		key := clientIP(c.Request, cfg.TrustedProxies)
+		key := ResolveClientIP(c.Request)
 		if rc.rl.allow(key) {
 			c.Next()
 			return

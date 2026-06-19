@@ -24,15 +24,13 @@ func TestValidateRateLimit(t *testing.T) {
 		ok   bool
 	}{
 		{"disabled zeros ok", rateLimitDTO{Enabled: false}, true},
-		{"enabled valid", rateLimitDTO{Enabled: true, RPS: 10, Burst: 20, TrustedProxies: 1}, true},
+		{"enabled valid", rateLimitDTO{Enabled: true, RPS: 10, Burst: 20}, true},
 		{"negative rps", rateLimitDTO{RPS: -1}, false},
 		{"rps too large", rateLimitDTO{RPS: maxRateLimitRPS + 1}, false},
 		{"nan rps", rateLimitDTO{RPS: math.NaN()}, false},
 		{"inf rps", rateLimitDTO{RPS: math.Inf(1)}, false},
 		{"negative burst", rateLimitDTO{Burst: -1}, false},
 		{"burst too large", rateLimitDTO{Burst: maxRateLimitBurst + 1}, false},
-		{"negative proxies", rateLimitDTO{TrustedProxies: -1}, false},
-		{"proxies too large", rateLimitDTO{TrustedProxies: maxRateLimitProxies + 1}, false},
 		{"enabled zero rps", rateLimitDTO{Enabled: true, RPS: 0, Burst: 5}, false},
 		{"enabled zero burst", rateLimitDTO{Enabled: true, RPS: 5, Burst: 0}, false},
 	}
@@ -94,7 +92,7 @@ func TestRateLimitEndpoints(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupHandlerStore(t)
 
-	env := middleware.RateLimitConfig{Enabled: false, RPS: 10, Burst: 20, TrustedProxies: 0}
+	env := middleware.RateLimitConfig{Enabled: false, RPS: 10, Burst: 20}
 	ctrl := middleware.NewRateLimitController(env)
 	SetRateLimitController(ctrl, env)
 
@@ -126,11 +124,11 @@ func TestRateLimitEndpoints(t *testing.T) {
 	}
 
 	// Valid PUT persists and applies live.
-	w = doReq(r, http.MethodPut, "/rl", `{"enabled":true,"rps":5,"burst":3,"trustedProxies":1}`)
+	w = doReq(r, http.MethodPut, "/rl", `{"enabled":true,"rps":5,"burst":3}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT status %d body=%s", w.Code, w.Body.String())
 	}
-	if got := ctrl.Current(); !got.Enabled || got.RPS != 5 || got.Burst != 3 || got.TrustedProxies != 1 {
+	if got := ctrl.Current(); !got.Enabled || got.RPS != 5 || got.Burst != 3 {
 		t.Fatalf("controller not applied: %+v", got)
 	}
 

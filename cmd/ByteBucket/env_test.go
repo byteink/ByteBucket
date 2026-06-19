@@ -74,11 +74,39 @@ func TestLoadRateLimitConfig_ReadsAllFields(t *testing.T) {
 	t.Setenv("RATE_LIMIT_ENABLED", "true")
 	t.Setenv("RATE_LIMIT_RPS", "10.5")
 	t.Setenv("RATE_LIMIT_BURST", "20")
-	t.Setenv("RATE_LIMIT_TRUSTED_PROXIES", "2")
 	cfg := loadRateLimitConfig()
-	if !cfg.Enabled || cfg.RPS != 10.5 || cfg.Burst != 20 || cfg.TrustedProxies != 2 {
+	if !cfg.Enabled || cfg.RPS != 10.5 || cfg.Burst != 20 {
 		t.Fatalf("unexpected cfg: %+v", cfg)
 	}
+}
+
+func TestLoadTrustedProxyConfig(t *testing.T) {
+	t.Run("reads headers and leftmost", func(t *testing.T) {
+		t.Setenv("TRUSTED_PROXY_HEADERS", " CF-Connecting-IP , X-Forwarded-For ")
+		t.Setenv("TRUSTED_PROXY_USE_LEFTMOST_IP", "true")
+		t.Setenv("RATE_LIMIT_TRUSTED_PROXIES", "")
+		cfg := loadTrustedProxyConfig()
+		if len(cfg.Headers) != 2 || cfg.Headers[0] != "CF-Connecting-IP" || cfg.Headers[1] != "X-Forwarded-For" || !cfg.UseLeftmostIP {
+			t.Fatalf("unexpected cfg: %+v", cfg)
+		}
+	})
+	t.Run("back-compat shim trusts XFF when only legacy proxies set", func(t *testing.T) {
+		t.Setenv("TRUSTED_PROXY_HEADERS", "")
+		t.Setenv("TRUSTED_PROXY_USE_LEFTMOST_IP", "")
+		t.Setenv("RATE_LIMIT_TRUSTED_PROXIES", "2")
+		cfg := loadTrustedProxyConfig()
+		if len(cfg.Headers) != 1 || cfg.Headers[0] != "X-Forwarded-For" || cfg.UseLeftmostIP {
+			t.Fatalf("shim cfg: %+v", cfg)
+		}
+	})
+	t.Run("default empty", func(t *testing.T) {
+		t.Setenv("TRUSTED_PROXY_HEADERS", "")
+		t.Setenv("TRUSTED_PROXY_USE_LEFTMOST_IP", "")
+		t.Setenv("RATE_LIMIT_TRUSTED_PROXIES", "")
+		if cfg := loadTrustedProxyConfig(); len(cfg.Headers) != 0 || cfg.UseLeftmostIP {
+			t.Fatalf("default cfg: %+v", cfg)
+		}
+	})
 }
 
 func TestLoadEncryptionKey(t *testing.T) {

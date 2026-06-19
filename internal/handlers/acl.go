@@ -43,7 +43,7 @@ func auditACLChange(c *gin.Context, resourceKind, bucket, key, oldACL, newACL st
 		"to", newACL,
 		"actor", actor,
 		"request_id", middleware.RequestID(c),
-		"remote_ip", c.ClientIP(),
+		"remote_ip", middleware.ResolveClientIP(c.Request),
 	)
 }
 

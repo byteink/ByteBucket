@@ -30,7 +30,6 @@ export interface RateLimitConfig {
   enabled: boolean;
   rps: number;
   burst: number;
-  trustedProxies: number;
 }
 
 // RateLimitState carries the environment baseline, the persisted override
@@ -265,6 +264,55 @@ export async function putAccessLog(s: Session, cfg: AccessLogConfig): Promise<Ac
   });
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as AccessLogConfig;
+}
+
+// Admin API subpath for the trusted-proxy client-IP resolution config (GET/PUT).
+const TRUSTED_PROXY_PATH = '/api/config/trustedproxy';
+
+// TrustedProxyConfig is the ordered list of request headers trusted to carry the
+// real client IP behind a reverse proxy, plus whether to read the leftmost
+// (less safe) rather than the rightmost entry of a multi-value header. An empty
+// headers list trusts no header — the socket peer is the client.
+export interface TrustedProxyConfig {
+  headers: string[];
+  useLeftmostIP: boolean;
+}
+
+// getTrustedProxy returns the effective trusted-proxy config.
+export async function getTrustedProxy(s: Session): Promise<TrustedProxyConfig> {
+  const res = await fetch(TRUSTED_PROXY_PATH, { headers: authHeaders(s) });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as TrustedProxyConfig;
+}
+
+// putTrustedProxy persists the trusted-proxy config, returning the cleaned value.
+export async function putTrustedProxy(s: Session, cfg: TrustedProxyConfig): Promise<TrustedProxyConfig> {
+  const res = await fetch(TRUSTED_PROXY_PATH, {
+    method: 'PUT',
+    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as TrustedProxyConfig;
+}
+
+// WhoAmI reports how the server resolves the current request's client IP, plus
+// the raw signals that fed the decision, so a trusted-proxy setup can be
+// validated live from the Settings page.
+export interface WhoAmI {
+  ip: string;
+  remoteAddr: string;
+  forwardedFor: string;
+  detectedHeader: string;
+  trustedHeaders: string[];
+  useLeftmostIP: boolean;
+}
+
+// getWhoAmI returns the resolved client IP for this very request.
+export async function getWhoAmI(s: Session): Promise<WhoAmI> {
+  const res = await fetch('/api/whoami', { headers: authHeaders(s) });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as WhoAmI;
 }
 
 // Admin API subpath for the request-sample retention setting (GET/PUT).

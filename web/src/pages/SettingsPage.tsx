@@ -5,16 +5,30 @@ import {
   getRateLimit,
   getRetention,
   getSyncWrites,
+  getTrustedProxy,
+  getWhoAmI,
   putAccessLog,
   putRateLimit,
   putRetention,
   putSyncWrites,
+  putTrustedProxy,
   type AccessLogConfig,
   type RateLimitConfig,
   type RateLimitState,
+  type TrustedProxyConfig,
+  type WhoAmI,
 } from '../lib/admin';
-import { loadSession } from '../lib/session';
+import { loadSession, type Session } from '../lib/session';
 import { ErrorBanner } from '../components/ErrorBanner';
+
+// Well-known reverse-proxy / CDN headers offered as presets. Operators can add
+// any other header name; these cover the common vendors.
+const PROXY_HEADER_PRESETS = ['X-Forwarded-For', 'X-Real-IP', 'CF-Connecting-IP', 'True-Client-IP', 'Fly-Client-IP'];
+
+// Header names are case-insensitive (RFC 7230); compare accordingly.
+function hasHeader(headers: string[], h: string): boolean {
+  return headers.some((x) => x.toLowerCase() === h.toLowerCase());
+}
 
 export default function SettingsPage() {
   const session = loadSession();
@@ -188,14 +202,6 @@ export default function SettingsPage() {
             onChange={(v) => patch({ burst: Math.trunc(v) })}
             hint={`Default: ${fmt(state?.env.burst)}`}
           />
-          <NumberField
-            label="Trusted proxies"
-            value={form.trustedProxies}
-            step="1"
-            min={0}
-            onChange={(v) => patch({ trustedProxies: Math.trunc(v) })}
-            hint={`Reverse-proxy hops in front of the server. Default: ${fmt(state?.env.trustedProxies)}`}
-          />
 
           <div className="flex gap-2 pt-1">
             <button className="btn-primary h-8 px-3 text-xs" disabled={busy} onClick={onSave}>
@@ -212,6 +218,11 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+
+      <div className="mb-2 mt-8 flex items-baseline justify-between">
+        <h3 className="text-sm">Trusted proxy</h3>
+      </div>
+      {session && <TrustedProxySection session={session} onNotice={setNotice} onError={setError} />}
 
       <div className="mb-2 mt-8 flex items-baseline justify-between">
         <h3 className="text-sm">Durability</h3>
@@ -289,11 +300,154 @@ export default function SettingsPage() {
           </button>
           <p className="text-xs text-ink-500">
             Logs every object read, write, and delete (who, which key, status) to the unified log,
-            viewable under Logs. Off by default; the firehose is written off the request path.
+            viewable under Logs. Off by default; the firehose is written off the request path. The
+            captured client IP follows the Trusted proxy settings above.
           </p>
         </div>
       )}
     </section>
+  );
+}
+
+function TrustedProxySection({
+  session,
+  onNotice,
+  onError,
+}: Readonly<{ session: Session; onNotice: (m: string) => void; onError: (m: string) => void }>) {
+  const [cfg, setCfg] = useState<TrustedProxyConfig | null>(null);
+  const [who, setWho] = useState<WhoAmI | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [custom, setCustom] = useState('');
+
+  function fail(e: unknown) {
+    onError(e instanceof Error ? e.message : String(e));
+  }
+  function loadWho() {
+    getWhoAmI(session).then(setWho).catch(fail);
+  }
+
+  useEffect(() => {
+    getTrustedProxy(session).then(setCfg).catch(fail);
+    loadWho();
+    // session is read once; depending on its identity would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function toggle(h: string) {
+    setCfg((c) =>
+      c ? { ...c, headers: hasHeader(c.headers, h) ? c.headers.filter((x) => x.toLowerCase() !== h.toLowerCase()) : [...c.headers, h] } : c,
+    );
+  }
+  function addCustom() {
+    const h = custom.trim();
+    if (!h) return;
+    setCfg((c) => (c && !hasHeader(c.headers, h) ? { ...c, headers: [...c.headers, h] } : c));
+    setCustom('');
+  }
+
+  async function onSave() {
+    if (!cfg) return;
+    onError('');
+    onNotice('');
+    setBusy(true);
+    try {
+      const saved = await putTrustedProxy(session, cfg);
+      setCfg(saved);
+      onNotice(saved.headers.length ? `Trusting headers: ${saved.headers.join(', ')}.` : 'No trusted headers; using the socket peer.');
+      loadWho();
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!cfg) return <p className="text-ink-500 text-sm">Loading.</p>;
+
+  // The checkbox set is the presets plus any custom header already configured,
+  // so every selected header (preset or custom) can be toggled off.
+  const options = [...PROXY_HEADER_PRESETS, ...cfg.headers.filter((h) => !PROXY_HEADER_PRESETS.some((p) => p.toLowerCase() === h.toLowerCase()))];
+  const mismatch =
+    who !== null && who.trustedHeaders.length > 0 && who.detectedHeader !== '' && !hasHeader(who.trustedHeaders, who.detectedHeader);
+
+  return (
+    <div className="border border-ink-200 p-4 max-w-md space-y-4">
+      <div className="space-y-1">
+        {options.map((h) => (
+          <label key={h} className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={hasHeader(cfg.headers, h)} disabled={busy} onChange={() => toggle(h)} />
+            <span className="font-mono text-xs">{h}</span>
+          </label>
+        ))}
+      </div>
+
+      <div className="flex items-end gap-2">
+        <div className="flex-1">
+          <label className="field-label" htmlFor="tp-custom">Add custom header</label>
+          <input
+            id="tp-custom"
+            className="input"
+            value={custom}
+            placeholder="X-Real-IP"
+            onChange={(e) => setCustom(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                addCustom();
+              }
+            }}
+          />
+        </div>
+        <button className="btn h-9 px-3 text-xs" disabled={busy || custom.trim() === ''} onClick={addCustom}>
+          Add
+        </button>
+      </div>
+
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={cfg.useLeftmostIP}
+          disabled={busy}
+          onChange={(e) => setCfg((c) => (c ? { ...c, useLeftmostIP: e.target.checked } : c))}
+        />
+        <span>Use leftmost IP (less safe)</span>
+      </label>
+
+      <button className="btn-primary h-8 px-3 text-xs" disabled={busy} onClick={onSave}>
+        {busy ? 'Saving' : 'Save'}
+      </button>
+
+      <p className="text-xs text-ink-500">
+        Ordered list of headers trusted to carry the real client IP behind a reverse proxy; the first
+        present header wins. Empty means trust no header (use the socket peer). Rightmost is the safe
+        default for a multi-value header like X-Forwarded-For.
+      </p>
+
+      {who && (
+        <div className="text-xs text-ink-500 border-l-2 border-ink-300 pl-3 space-y-1">
+          <div className="flex items-center justify-between">
+            <span>Validation</span>
+            <button className="text-ink-500 hover:text-ink-900" onClick={loadWho} type="button">
+              Refresh
+            </button>
+          </div>
+          <div>
+            Your IP, as the server sees it: <span className="font-mono text-ink-900">{who.ip}</span>
+            {who.detectedHeader ? <> via <span className="font-mono">{who.detectedHeader}</span></> : ' (no proxy header detected)'}
+          </div>
+          <div>
+            Socket peer: <span className="font-mono">{who.remoteAddr}</span> · X-Forwarded-For:{' '}
+            <span className="font-mono">{who.forwardedFor || '—'}</span>
+          </div>
+          {mismatch && (
+            <div className="text-danger">
+              Configured header does not match the detected one ({who.detectedHeader}); the captured IP
+              may be the proxy, not the client.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -47,7 +47,7 @@ func Log() gin.HandlerFunc {
 			slog.String("path", path),
 			slog.Int("status", status),
 			slog.Float64("duration_ms", float64(time.Since(start).Microseconds())/1000.0),
-			slog.String("remote_ip", c.ClientIP()),
+			slog.String("remote_ip", ResolveClientIP(c.Request)),
 			slog.Int64("bytes_in", c.Request.ContentLength),
 			slog.Int("bytes_out", c.Writer.Size()),
 		}
