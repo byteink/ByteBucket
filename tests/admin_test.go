@@ -129,6 +129,28 @@ func deleteUser(t *testing.T, accessKeyID string) {
 	t.Logf("User %s deleted successfully", accessKeyID)
 }
 
+// fetchPresigned GETs a presigned URL, replaying the headers the SDK signed
+// into it. Since aws-sdk-go-v2 v1.43 the S3 presigner keeps x-amz-checksum-mode
+// as a signed header instead of hoisting it into the query string, so a bare
+// http.Get omits it and the canonical request no longer matches the signature.
+// SignedHeader carries exactly what the caller must send back.
+func fetchPresigned(rawURL string, signed http.Header) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	for name, values := range signed {
+		// Host is carried by the request line, not a header field.
+		if name == "Host" {
+			continue
+		}
+		for _, v := range values {
+			req.Header.Add(name, v)
+		}
+	}
+	return http.DefaultClient.Do(req)
+}
+
 // testS3Operations performs S3 operations with the given client on a specified bucket.
 func testS3Operations(t *testing.T, client *s3.Client, bucket, key, content string, shouldSucceed bool) {
 	t.Logf("Creating bucket: %s", bucket)
@@ -168,7 +190,7 @@ func testS3Operations(t *testing.T, client *s3.Client, bucket, key, content stri
 		t.Fatalf("Failed to presign URL: %v", err)
 	}
 
-	resp, err := http.Get(presignedResp.URL)
+	resp, err := fetchPresigned(presignedResp.URL, presignedResp.SignedHeader)
 	if err != nil {
 		t.Fatalf("Failed to fetch object using presigned URL: %v", err)
 	}
@@ -303,7 +325,7 @@ func TestPresignedURLExpiration(t *testing.T) {
 	t.Log("Sleeping for 3 seconds to let presigned URL expire")
 	time.Sleep(3 * time.Second)
 
-	resp, err := http.Get(presignedResp.URL)
+	resp, err := fetchPresigned(presignedResp.URL, presignedResp.SignedHeader)
 	if err != nil {
 		t.Fatalf("Failed to fetch object using presigned URL: %v", err)
 	}
