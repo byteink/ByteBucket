@@ -14,8 +14,10 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,6 +33,36 @@ var distFS embed.FS
 // buildTime is used as the modtime for the embedded index.html so that
 // conditional-GET handling stays stable across restarts.
 var buildTime = time.Now()
+
+// mediaOrigin is the public S3 origin (PUBLIC_BASE_URL) the SPA may load
+// images, media and PDF previews from directly via presigned URLs. Empty
+// keeps the policy same-origin only.
+var mediaOrigin atomic.Value // string
+
+// SetMediaOrigin records the scheme and host of the public storage origin for
+// the CSP. Anything that is not an absolute http(s) URL with a host is ignored
+// rather than widening the policy with a malformed source.
+func SetMediaOrigin(raw string) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		mediaOrigin.Store("")
+		return
+	}
+	mediaOrigin.Store(u.Scheme + "://" + u.Host)
+}
+
+// csp builds the Content-Security-Policy for SPA responses: same-origin for
+// everything, blob: for previews built from downloaded bodies, and the public
+// storage origin (when configured) so presigned previews stream directly.
+func csp() string {
+	extra := ""
+	if o, _ := mediaOrigin.Load().(string); o != "" {
+		extra = " " + o
+	}
+	return "default-src 'self'; img-src 'self' data: blob:" + extra + "; media-src 'self' blob:" + extra +
+		"; frame-src 'self' blob:" + extra + "; style-src 'self' 'unsafe-inline'; " +
+		"script-src 'self'; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'"
+}
 
 // Handler returns an http.Handler that serves the embedded SPA.
 // Paths that resolve to a real file under dist/ are served directly;
@@ -72,16 +104,13 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//     Content-Type below so browsers do not second-guess our typing.
 	//   Referrer-Policy:no-referrer — admin URLs never leak via outbound
 	//     links (e.g. the user clicks an external help link from the UI).
-	//   Content-Security-Policy — restrict to same-origin assets, no
-	//     inline scripts beyond what Vite already inlines (sha-pinned by
-	//     'self' here keeps the door closed for stored-XSS routed through
-	//     anywhere on the admin origin).
+	//   Content-Security-Policy — same-origin assets and no inline scripts,
+	//     so stored XSS routed through anywhere on the admin origin has no
+	//     script to run; see csp() for the preview carve-outs.
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Content-Security-Policy",
-		"default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "+
-			"script-src 'self'; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'")
+	w.Header().Set("Content-Security-Policy", csp())
 
 	clean := path.Clean("/" + strings.TrimPrefix(r.URL.Path, "/"))
 	if clean == "/" {

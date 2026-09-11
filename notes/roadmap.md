@@ -257,3 +257,11 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   flusher) + pentest (251, +14) + browser E2E (13). Query strings/credentials
   never recorded.
   REMAINING: A6 visual ACL matrix, Phase 3 versioning.
+- 2026-09-11: admin console redesign DONE (prototyped in Claude Design first).
+  Sidebar shell, one control height, CSS tooltips (no native title), native
+  <dialog> confirms replace window.confirm/prompt, hover row actions, structured
+  ACL editor in a drawer (closes A6 visual ACL matrix), per-bucket object
+  counts in /api/stats, object previews stream via presigned URLs (CSP admits
+  PUBLIC_BASE_URL for img/media/frame), HEAD backfills Last-Modified from mtime,
+  theme boot moved to /theme.js (inline script was CSP-blocked). Browser E2E
+  grew to 17 specs. REMAINING: Phase 3 versioning.

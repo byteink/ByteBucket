@@ -1,245 +1,348 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ACLRule, createUser, CreatedUser, deleteUser, listUsers, updateUserACL, User } from '../lib/admin';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  createUser,
+  deleteUser,
+  listUsers,
+  updateUserACL,
+  type ACLRule,
+  type CreatedUser,
+  type User,
+} from '../lib/admin';
 import { loadSession } from '../lib/session';
-import { copyText } from '../lib/clipboard';
+import { errorMessage, formatDate } from '../lib/format';
 import { ErrorBanner } from '../components/ErrorBanner';
+import {
+  Badge,
+  ConfirmDialog,
+  CopyButton,
+  Dialog,
+  Drawer,
+  EmptyState,
+  IconButton,
+  Loading,
+  PageHeader,
+  SearchInput,
+  Tip,
+} from '../components/ui';
+import { Icon } from '../components/icons';
+import { AccessEditor, isAdminACL, shortAction } from '../components/AccessEditor';
 
-// Least-privilege default: no rules. The operator explicitly edits the ACL
-// after creation to grant bucket / action access, or the admin wildcard
-// (Allow / * / *) to promote to admin.
-const defaultACL: ACLRule[] = [];
+const ACTION_WORDS: Record<string, string> = {
+  's3:GetObject': 'read',
+  's3:PutObject': 'write',
+  's3:DeleteObject': 'delete',
+  's3:ListBucket': 'list',
+};
 
-// adminACL is the exact ACL shape the server's admin check matches on:
-// Effect=Allow AND Buckets contains "*" AND Actions contains "*". The UI
-// uses this preset so operators never have to hand-craft the JSON to
-// promote a user.
-const adminACL: ACLRule[] = [{ effect: 'Allow', buckets: ['*'], actions: ['*'] }];
-
-function isAdminACL(rules: ACLRule[]): boolean {
-  return rules.some(
-    (r) =>
-      r.effect?.toLowerCase() === 'allow' &&
-      (r.buckets ?? []).includes('*') &&
-      (r.actions ?? []).includes('*')
-  );
+function describeRule(r: ACLRule): string {
+  const actions = r.actions.map((a) => ACTION_WORDS[a] ?? shortAction(a)).join(', ');
+  const deny = r.effect.toLowerCase() === 'allow' ? '' : 'deny ';
+  return `${deny}${r.buckets.join(', ')} · ${actions}`;
 }
 
-function isAdminText(text: string): boolean {
-  try {
-    const parsed = JSON.parse(text) as ACLRule[];
-    return Array.isArray(parsed) && isAdminACL(parsed);
-  } catch {
-    return false;
-  }
+// The bucket input is free text, so trailing commas and stray spaces are
+// dropped here rather than while the operator is still typing.
+function normalizeRules(rules: ACLRule[]): ACLRule[] {
+  return rules.map((r) => ({
+    effect: r.effect,
+    buckets: r.buckets.map((b) => b.trim()).filter(Boolean),
+    actions: r.actions.map((a) => a.trim()).filter(Boolean),
+  }));
 }
 
-// Go's zero value for time.Time marshals to "0001-01-01T00:00:00Z".
-// Treat anything before 2000 as unknown so legacy users read cleanly.
-function formatCreated(ts?: string): string {
-  if (!ts) return '—';
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime()) || d.getFullYear() < 2000) return '—';
-  return d.toISOString().slice(0, 10);
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
+}
+
+interface Editing {
+  id: string;
+  rules: ACLRule[];
 }
 
 export default function UsersPage() {
-  const session = loadSession();
+  const [session] = useState(loadSession);
   const [users, setUsers] = useState<User[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
   const [created, setCreated] = useState<CreatedUser | null>(null);
-  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Editing | null>(null);
+  const [draft, setDraft] = useState<ACLRule[] | null>(null);
+  const [dialogError, setDialogError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     if (!session) return;
     setError(null);
     try {
       setUsers(await listUsers(session));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     }
-  }
+  }, [session]);
 
   useEffect(() => {
     void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refresh]);
 
   const sorted = useMemo(
     () => (users ?? []).slice().sort((a, b) => a.accessKeyID.localeCompare(b.accessKeyID)),
-    [users]
+    [users],
   );
+  const needle = filter.trim().toLowerCase();
+  const visible = needle ? sorted.filter((u) => u.accessKeyID.toLowerCase().includes(needle)) : sorted;
+  const admins = sorted.filter((u) => isAdminACL(u.acl ?? [])).length;
 
   async function onCreate() {
     if (!session) return;
     try {
-      const user = await createUser(session, defaultACL);
-      setCreated(user);
+      setCreated(await createUser(session, []));
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     }
   }
 
-  async function onDelete(id: string) {
-    if (!session) return;
-    if (!window.confirm(`Delete user ${id}?`)) return;
+  async function onDelete() {
+    if (!session || !deleting) return;
+    setBusy(true);
+    setDialogError(null);
     try {
-      await deleteUser(session, id);
+      await deleteUser(session, deleting);
+      setDeleting(null);
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setDialogError(errorMessage(e));
+    } finally {
+      setBusy(false);
     }
   }
 
-  async function onSaveACL() {
-    if (!session || !editing) return;
-    let parsed: ACLRule[];
+  function openEditor(id: string, rules: ACLRule[]) {
+    setDialogError(null);
+    setDraft(rules);
+    setEditing({ id, rules });
+  }
+
+  function closeEditor() {
+    setEditing(null);
+    setDraft(null);
+    setDialogError(null);
+  }
+
+  async function onSaveAccess() {
+    if (!session || !editing || draft === null) return;
+    setBusy(true);
+    setDialogError(null);
     try {
-      parsed = JSON.parse(editing.text) as ACLRule[];
-    } catch {
-      setError('ACL must be valid JSON (array of rules)');
-      return;
-    }
-    try {
-      await updateUserACL(session, editing.id, parsed);
-      setEditing(null);
+      await updateUserACL(session, editing.id, normalizeRules(draft));
+      closeEditor();
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setDialogError(errorMessage(e));
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
     <section>
-      <div className="flex items-baseline justify-between mb-6">
-        <h2 className="text-base">Users</h2>
-        <button className="btn-primary" onClick={onCreate}>New user</button>
-      </div>
+      <PageHeader
+        title="Users"
+        sub={users ? `${plural(users.length, 'access key')} · ${plural(admins, 'admin')}` : undefined}
+        actions={
+          <>
+            <SearchInput
+              value={filter}
+              onChange={setFilter}
+              placeholder="Filter by access key"
+              label="Filter by access key"
+            />
+            <button type="button" className="btn-primary" onClick={onCreate}>
+              <Icon name="plus" />
+              New user
+            </button>
+          </>
+        }
+      />
 
       {error && <ErrorBanner message={error} className="mb-4" />}
 
       {users === null ? (
-        <p className="text-ink-500 text-sm">Loading.</p>
-      ) : sorted.length === 0 ? (
-        <p className="text-ink-500 text-sm">No users.</p>
+        <Loading />
+      ) : visible.length === 0 ? (
+        <EmptyState text={needle ? 'No users match this filter.' : 'No users.'} />
       ) : (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left border-b border-ink-200 text-ink-500">
-              <th className="table-cell font-normal">Access Key ID</th>
-              <th className="table-cell font-normal w-20">Role</th>
-              <th className="table-cell font-normal">Rules</th>
-              <th className="table-cell font-normal w-40">Created</th>
-              <th className="table-cell font-normal w-40"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((u) => (
-              <tr key={u.accessKeyID} className="border-b border-ink-100">
-                <td className="table-cell font-mono text-xs">{u.accessKeyID}</td>
-                <td className="table-cell text-xs">
-                  {isAdminACL(u.acl ?? []) ? 'admin' : <span className="text-ink-500">user</span>}
-                </td>
-                <td className="table-cell text-ink-500 text-xs">{(u.acl ?? []).length} rule(s)</td>
-                <td className="table-cell text-ink-500 text-xs font-mono">{formatCreated(u.createdAt)}</td>
-                <td className="table-cell text-right">
-                  <button
-                    className="btn h-7 px-2 text-xs mr-2"
-                    onClick={() =>
-                      setEditing({ id: u.accessKeyID, text: JSON.stringify(u.acl ?? [], null, 2) })
-                    }
-                  >
-                    Edit ACL
-                  </button>
-                  <button className="btn-danger h-7 px-2 text-xs" onClick={() => onDelete(u.accessKeyID)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <UsersTable
+          users={visible}
+          self={session?.accessKey ?? ''}
+          onEdit={(u) => openEditor(u.accessKeyID, u.acl ?? [])}
+          onDelete={setDeleting}
+        />
       )}
 
-      {created && <CreatedUserModal user={created} onClose={() => setCreated(null)} />}
+      <ConfirmDialog
+        open={deleting !== null}
+        title={`Delete user ${deleting ?? ''}?`}
+        body="Requests signed with this key stop working immediately."
+        confirmLabel="Delete user"
+        busy={busy}
+        error={dialogError}
+        onConfirm={onDelete}
+        onClose={() => {
+          setDeleting(null);
+          setDialogError(null);
+        }}
+      />
 
-      {editing && (
-        <div className="fixed inset-0 bg-ink-900/40 flex items-center justify-center p-6 z-10">
-          <div className="bg-ink-0 border border-ink-200 w-full max-w-xl p-6">
-            <h3 className="text-sm font-mono mb-4">Edit ACL — {editing.id}</h3>
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs text-ink-500">
-                {isAdminText(editing.text) ? 'Admin (full access).' : 'Not admin.'}
-              </span>
-              <div className="flex gap-2">
-                <button
-                  className="btn h-7 px-2 text-xs"
-                  onClick={() => setEditing({ ...editing, text: JSON.stringify(adminACL, null, 2) })}
-                  disabled={isAdminText(editing.text)}
-                >
-                  Make admin
-                </button>
-                <button
-                  className="btn h-7 px-2 text-xs"
-                  onClick={() => setEditing({ ...editing, text: '[]' })}
-                  disabled={!isAdminText(editing.text)}
-                >
-                  Revoke admin
-                </button>
-              </div>
-            </div>
-            <textarea
-              className="w-full h-64 border border-ink-200 p-2 font-mono text-xs focus:outline-none focus:border-ink-900"
-              value={editing.text}
-              onChange={(e) => setEditing({ ...editing, text: e.target.value })}
-            />
-            <div className="flex justify-end gap-2 mt-4">
-              <button className="btn" onClick={() => setEditing(null)}>Cancel</button>
-              <button className="btn-primary" onClick={onSaveACL}>Save</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <CreatedDialog
+        user={created}
+        onDone={() => setCreated(null)}
+        onGrant={() => {
+          if (!created) return;
+          const id = created.accessKeyID;
+          setCreated(null);
+          openEditor(id, []);
+        }}
+      />
+
+      <Drawer
+        open={editing !== null}
+        title={
+          <>
+            Edit access <span className="font-mono font-normal text-ink-500 ml-1.5">{editing?.id}</span>
+          </>
+        }
+        onClose={closeEditor}
+        footer={
+          <>
+            <button type="button" className="btn" onClick={closeEditor} disabled={busy}>
+              Cancel
+            </button>
+            <button type="button" className="btn-primary" onClick={onSaveAccess} disabled={busy || draft === null}>
+              {busy ? 'Working' : 'Save access'}
+            </button>
+          </>
+        }
+      >
+        {editing && <AccessEditor key={editing.id} initial={editing.rules} error={dialogError} onChange={setDraft} />}
+      </Drawer>
     </section>
   );
 }
 
-function CreatedUserModal({ user, onClose }: { user: CreatedUser; onClose: () => void }) {
-  async function copy(value: string) {
-    try {
-      await copyText(value);
-    } catch {
-      /* ignore */
-    }
-  }
+function UsersTable({
+  users,
+  self,
+  onEdit,
+  onDelete,
+}: Readonly<{ users: User[]; self: string; onEdit: (u: User) => void; onDelete: (id: string) => void }>) {
   return (
-    <div className="fixed inset-0 bg-ink-900/40 flex items-center justify-center p-6 z-10">
-      <div className="bg-ink-0 border border-ink-200 w-full max-w-md p-6">
-        <h3 className="text-sm font-mono mb-2">User created</h3>
-        <p className="text-xs text-ink-500 mb-4">
-          Copy the secret now. It will not be shown again.
-        </p>
-        <div className="space-y-3">
-          <KeyRow label="Access Key ID" value={user.accessKeyID} onCopy={() => copy(user.accessKeyID)} />
-          <KeyRow label="Secret" value={user.secretAccessKey} onCopy={() => copy(user.secretAccessKey)} />
-        </div>
-        <div className="flex justify-end mt-6">
-          <button className="btn-primary" onClick={onClose}>Done</button>
-        </div>
-      </div>
-    </div>
+    <table className="tbl">
+      <thead>
+        <tr>
+          <th>Access key ID</th>
+          <th className="w-[100px]">Role</th>
+          <th>Access</th>
+          <th className="w-[120px]">Created</th>
+          <th className="w-20"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {users.map((u) => (
+          <UserRow key={u.accessKeyID} user={u} isSelf={u.accessKeyID === self} onEdit={onEdit} onDelete={onDelete} />
+        ))}
+      </tbody>
+    </table>
   );
 }
 
-function KeyRow({ label, value, onCopy }: { label: string; value: string; onCopy: () => void }) {
+function UserRow({
+  user,
+  isSelf,
+  onEdit,
+  onDelete,
+}: Readonly<{ user: User; isSelf: boolean; onEdit: (u: User) => void; onDelete: (id: string) => void }>) {
+  const rules = user.acl ?? [];
+  const admin = isAdminACL(rules);
+  return (
+    <tr>
+      <td className="font-mono">
+        {user.accessKeyID}
+        {isSelf && <span className="font-sans text-xs text-ink-500"> (you)</span>}
+      </td>
+      <td>{admin ? <Badge>Admin</Badge> : <span className="text-xs text-ink-500">User</span>}</td>
+      <td>
+        <AccessSummary rules={rules} admin={admin} />
+      </td>
+      <td className="font-mono text-ink-500">{formatDate(user.createdAt)}</td>
+      <td>
+        <div className="acts">
+          <IconButton icon="pencil" label="Edit access" onClick={() => onEdit(user)} />
+          <IconButton
+            icon="trash"
+            label={isSelf ? 'You cannot delete your own key' : 'Delete user'}
+            disabled={isSelf}
+            onClick={() => onDelete(user.accessKeyID)}
+          />
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function AccessSummary({ rules, admin }: Readonly<{ rules: ACLRule[]; admin: boolean }>) {
+  if (admin) return <>All buckets, all actions</>;
+  if (rules.length === 0) {
+    return (
+      <span className="text-ink-500 inline-flex items-center gap-1.5">
+        No rules
+        <Tip pos="below" text={'This key cannot do anything yet.\nGrant access to use it.'}>
+          <Icon name="info" size={14} />
+        </Tip>
+      </span>
+    );
+  }
+  return <>{rules.map(describeRule).join('; ')}</>;
+}
+
+// The secret is shown exactly once: the server stores it encrypted and has
+// no endpoint to read it back, so the dialog is the only chance to copy it.
+function CreatedDialog({
+  user,
+  onDone,
+  onGrant,
+}: Readonly<{ user: CreatedUser | null; onDone: () => void; onGrant: () => void }>) {
+  return (
+    <Dialog open={user !== null} title="User created" onClose={onDone}>
+      <p>
+        Copy the secret now. It is shown once and cannot be recovered. The key has no access until you grant rules.
+      </p>
+      <div className="mt-4 flex flex-col gap-3">
+        <SecretField id="created-ak" label="Access key ID" value={user?.accessKeyID ?? ''} />
+        <SecretField id="created-sk" label="Secret access key" value={user?.secretAccessKey ?? ''} />
+      </div>
+      <div className="btns">
+        <button type="button" className="btn" onClick={onDone}>
+          Done
+        </button>
+        <button type="button" className="btn-primary" onClick={onGrant}>
+          Grant access
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
+function SecretField({ id, label, value }: Readonly<{ id: string; label: string; value: string }>) {
   return (
     <div>
-      <div className="field-label">{label}</div>
-      <div className="flex gap-2">
-        <code className="flex-1 border border-ink-200 px-2 h-9 flex items-center overflow-x-auto text-xs">
-          {value}
-        </code>
-        <button className="btn text-xs" onClick={onCopy}>Copy</button>
+      <label className="field-label" htmlFor={id}>
+        {label}
+      </label>
+      <div className="flex gap-1.5">
+        <input id={id} className="input-mono" readOnly value={value} />
+        <CopyButton value={value} />
       </div>
     </div>
   );

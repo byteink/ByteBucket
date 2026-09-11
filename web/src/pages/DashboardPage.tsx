@@ -1,76 +1,119 @@
 import { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { getStats, type Stats } from '../lib/admin';
 import { loadSession } from '../lib/session';
+import { errorMessage, formatBytes, formatCount } from '../lib/format';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { RequestChart } from '../components/RequestChart';
+import { Icon } from '../components/icons';
+import { EmptyState, IconButton, Loading, PageHeader, Tip } from '../components/ui';
 
-// formatBytes renders a byte count in the largest unit that keeps the number
-// readable, mirroring how operators think about storage size.
-function formatBytes(n: number): string {
-  if (n < 1024) return `${Math.round(n)} B`;
-  const units = ['KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(1)} ${units[i]}`;
-}
+const MULTIPART_TIP = 'Multipart uploads started but not yet\ncompleted or aborted. Parts stay on disk.';
+const TICK_MS = 5000;
 
-function formatCount(n: number): string {
-  return Math.round(n).toLocaleString('en-US');
+// Re-renders every few seconds so "Updated Ns ago" keeps ticking without a
+// refetch; the stats themselves only reload on demand.
+function useNow(): number {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), TICK_MS);
+    return () => clearInterval(t);
+  }, []);
+  return now;
 }
 
 export default function DashboardPage() {
   const session = loadSession();
   const [stats, setStats] = useState<Stats | null>(null);
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const now = useNow();
 
   useEffect(() => {
     if (!session) return;
+    let live = true;
     getStats(session)
-      .then(setStats)
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      .then((s) => {
+        if (!live) return;
+        setStats(s);
+        setFetchedAt(Date.now());
+        setError(null);
+      })
+      .catch((e) => live && setError(errorMessage(e)));
+    return () => {
+      live = false;
+    };
     // session is read once from localStorage; refetching on its identity would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [reload]);
 
-  const cards: ReadonlyArray<{ label: string; value: string }> = stats
-    ? [
-        { label: 'Buckets', value: formatCount(stats.buckets) },
-        { label: 'Objects', value: formatCount(stats.objects) },
-        { label: 'Storage used', value: formatBytes(stats.bytes) },
-        { label: 'Multipart open', value: formatCount(stats.multipartInProgress) },
-      ]
-    : [];
+  const ago = fetchedAt === null ? null : Math.max(0, Math.round((now - fetchedAt) / 1000));
 
   return (
     <section>
-      <h2 className="text-base mb-1">Dashboard</h2>
-      <p className="text-xs text-ink-500 mb-6">Storage footprint and object activity.</p>
+      <PageHeader
+        title="Overview"
+        sub="Storage footprint and S3 traffic on this node."
+        actions={
+          <>
+            {ago !== null && <span className="text-xs text-ink-500">Updated {ago}s ago</span>}
+            <IconButton icon="refresh" label="Refresh now" onClick={() => setReload((n) => n + 1)} />
+          </>
+        }
+      />
 
       {error && <ErrorBanner message={error} className="mb-4" />}
 
       {!stats ? (
-        <p className="text-ink-500 text-sm">Loading.</p>
+        <Loading />
       ) : (
-        <div className="space-y-8 max-w-3xl">
-          <div className="grid grid-cols-2 gap-px bg-ink-200 border border-ink-200 md:grid-cols-4">
-            {cards.map((c) => (
-              <div key={c.label} className="bg-paper p-4">
-                <div className="text-xs text-ink-500">{c.label}</div>
-                <div className="text-xl mt-1 tabular-nums">{c.value}</div>
-              </div>
-            ))}
-          </div>
-
-          <Activity stats={stats} />
-          <RequestChart />
-          <PerBucket stats={stats} />
+        <div className="flex flex-col gap-8">
+          <Tiles stats={stats} />
+          <RequestChart refreshKey={reload} />
+          {stats.perBucket.length === 0 ? (
+            <EmptyState
+              text="No buckets yet."
+              action={
+                <Link to="/buckets" className="btn">
+                  New bucket
+                </Link>
+              }
+            />
+          ) : (
+            <>
+              <Activity stats={stats} />
+              <PerBucket rows={stats.perBucket} />
+            </>
+          )}
         </div>
       )}
     </section>
+  );
+}
+
+function Tiles({ stats }: Readonly<{ stats: Stats }>) {
+  return (
+    <div className="stat-grid">
+      <div className="stat">
+        <div className="l">Buckets</div>
+        <div className="v">{formatCount(stats.buckets)}</div>
+      </div>
+      <div className="stat">
+        <div className="l">Objects</div>
+        <div className="v">{formatCount(stats.objects)}</div>
+      </div>
+      <div className="stat">
+        <div className="l">Storage used</div>
+        <div className="v">{formatBytes(stats.bytes)}</div>
+      </div>
+      <div className="stat">
+        <Tip text={MULTIPART_TIP} className="l">
+          Open multipart <Icon name="info" size={13} />
+        </Tip>
+        <div className="v">{formatCount(stats.multipartInProgress)}</div>
+      </div>
+    </div>
   );
 }
 
@@ -84,49 +127,66 @@ function Activity({ stats }: Readonly<{ stats: Stats }>) {
     { label: 'Data out', value: formatBytes(a.bytesOut) },
   ];
   return (
-    <div>
-      <h3 className="text-sm mb-2">Object activity (all buckets)</h3>
-      <div className="flex flex-wrap gap-x-10 gap-y-3">
+    <section className="flex flex-col gap-3">
+      <h2 className="text-sm font-medium">
+        Object activity <span className="text-ink-500 font-normal">· all time</span>
+      </h2>
+      <div className="flex flex-wrap gap-x-8 gap-y-3">
         {figures.map((f) => (
           <div key={f.label}>
             <div className="text-xs text-ink-500">{f.label}</div>
-            <div className="text-lg tabular-nums">{f.value}</div>
+            <div className="text-sm tabular-nums">{f.value}</div>
           </div>
         ))}
       </div>
-    </div>
+    </section>
   );
 }
 
-function PerBucket({ stats }: Readonly<{ stats: Stats }>) {
-  if (!stats.perBucket || stats.perBucket.length === 0) {
-    return <p className="text-ink-500 text-sm">No buckets yet.</p>;
-  }
+const NUM_COL = { width: 120 } as const;
+
+function PerBucket({ rows }: Readonly<{ rows: Stats['perBucket'] }>) {
+  const navigate = useNavigate();
+  const objectsPath = (name: string) => `/buckets/${encodeURIComponent(name)}/objects`;
   return (
-    <div>
-      <h3 className="text-sm mb-2">Per bucket</h3>
-      <table className="w-full text-sm">
+    <section className="flex flex-col gap-3">
+      <h2 className="text-sm font-medium">
+        Per bucket <span className="text-ink-500 font-normal">· all time</span>
+      </h2>
+      <table className="tbl">
         <thead>
-          <tr className="text-left border-b border-ink-200 text-ink-500">
-            <th className="table-cell font-normal">Bucket</th>
-            <th className="table-cell font-normal text-right w-28">Size</th>
-            <th className="table-cell font-normal text-right w-24">Uploads</th>
-            <th className="table-cell font-normal text-right w-24">Downloads</th>
-            <th className="table-cell font-normal text-right w-24">Deletes</th>
+          <tr>
+            <th>Bucket</th>
+            <th className="num" style={NUM_COL}>Size</th>
+            <th className="num" style={NUM_COL}>Objects</th>
+            <th className="num" style={NUM_COL}>Uploads</th>
+            <th className="num" style={NUM_COL}>Downloads</th>
+            <th className="num" style={NUM_COL}>Deletes</th>
+            <th style={{ width: 40 }} />
           </tr>
         </thead>
         <tbody>
-          {stats.perBucket.map((b) => (
-            <tr key={b.name} className="border-b border-ink-100">
-              <td className="table-cell font-mono text-xs break-all">{b.name}</td>
-              <td className="table-cell text-xs text-ink-500 text-right tabular-nums">{formatBytes(b.bytes)}</td>
-              <td className="table-cell text-xs text-right tabular-nums">{formatCount(b.uploads)}</td>
-              <td className="table-cell text-xs text-right tabular-nums">{formatCount(b.downloads)}</td>
-              <td className="table-cell text-xs text-right tabular-nums">{formatCount(b.deletes)}</td>
+          {rows.map((b) => (
+            <tr key={b.name}>
+              <td className="font-mono text-xs break-all">
+                <Link className="hover:underline" to={objectsPath(b.name)}>
+                  {b.name}
+                </Link>
+              </td>
+              <td className="num text-ink-500">{formatBytes(b.bytes)}</td>
+              <td className="num">{formatCount(b.objects)}</td>
+              <td className="num">{formatCount(b.uploads)}</td>
+              <td className="num">{formatCount(b.downloads)}</td>
+              <td className="num">{formatCount(b.deletes)}</td>
+              <td>
+                <div className="acts">
+                  <IconButton icon="open" label="Browse objects" onClick={() => navigate(objectsPath(b.name))} />
+                </div>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
-    </div>
+    </section>
   );
 }

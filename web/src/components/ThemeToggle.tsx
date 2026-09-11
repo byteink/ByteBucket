@@ -7,6 +7,7 @@ import {
   watchSystem,
   type Theme,
 } from '../lib/theme';
+import { Icon, type IconName } from './icons';
 
 const LABEL: Record<Theme, string> = {
   system: 'System',
@@ -14,40 +15,11 @@ const LABEL: Record<Theme, string> = {
   dark: 'Dark',
 };
 
-function ThemeIcon({ theme }: { theme: Theme }) {
-  const common = {
-    width: 14,
-    height: 14,
-    viewBox: '0 0 24 24',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 2,
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-    'aria-hidden': true,
-  };
-  if (theme === 'light') {
-    return (
-      <svg {...common}>
-        <circle cx="12" cy="12" r="4" />
-        <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4" />
-      </svg>
-    );
-  }
-  if (theme === 'dark') {
-    return (
-      <svg {...common}>
-        <path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z" />
-      </svg>
-    );
-  }
-  return (
-    <svg {...common}>
-      <rect x="2" y="3" width="20" height="14" rx="2" />
-      <path d="M8 21h8M12 17v4" />
-    </svg>
-  );
-}
+const ICON: Record<Theme, IconName> = {
+  system: 'monitor',
+  light: 'sun',
+  dark: 'moon',
+};
 
 // Rotates System -> Light -> Dark on each click. "System" tracks the OS while
 // selected; the choice persists across sessions.
@@ -71,12 +43,12 @@ export default function ThemeToggle() {
   return (
     <button
       type="button"
-      className="btn h-7 px-2 text-xs gap-1.5"
+      className="btn-ghost btn-sm flex-1 justify-start gap-2 text-ink-500 hover:text-ink-900 tt"
       onClick={onClick}
-      title={`Theme: ${LABEL[theme]} (click to change)`}
+      data-tip={`Theme: ${LABEL[theme]}. Click to change.`}
       aria-label={`Theme: ${LABEL[theme]}. Click to change.`}
     >
-      <ThemeIcon theme={theme} />
+      <Icon name={ICON[theme]} size={14} />
       {LABEL[theme]}
     </button>
   );

@@ -48,6 +48,9 @@ html.dark {
   }
   html {
     color-scheme: light;
+    /* Tooltips are absolutely positioned and may extend past the viewport
+     * while hidden; they must never create a horizontal scrollbar. */
+    overflow-x: hidden;
   }
   body {
     @apply bg-ink-0 text-ink-900 antialiased font-sans;
@@ -62,22 +65,319 @@ html.dark {
 }
 
 @layer components {
-  .btn {
-    @apply inline-flex items-center justify-center h-9 px-3 border border-ink-200 bg-ink-0 text-ink-900 hover:bg-ink-50 disabled:opacity-50 disabled:cursor-not-allowed;
+  /* Controls: one height (32px) everywhere, 28px inside table rows. */
+  .btn,
+  .btn-primary,
+  .btn-danger,
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-1.5 h-8 px-3 border border-ink-200 bg-ink-0 text-ink-900 text-[13px] whitespace-nowrap cursor-pointer hover:bg-ink-50 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-primary {
-    @apply inline-flex items-center justify-center h-9 px-3 bg-ink-900 text-ink-0 hover:bg-ink-700 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply bg-ink-900 text-ink-0 border-ink-900 hover:bg-ink-700 hover:border-ink-700;
   }
   .btn-danger {
-    @apply inline-flex items-center justify-center h-9 px-3 border border-ink-200 bg-ink-0 text-ink-900 hover:bg-ink-100;
+    @apply text-danger;
   }
-  .input {
-    @apply h-9 w-full px-2 border border-ink-200 bg-ink-0 text-ink-900 focus:outline-none focus:border-ink-900;
+  .btn-ghost {
+    @apply border-transparent bg-transparent hover:bg-ink-100;
+  }
+  .btn-sm {
+    @apply h-7 px-2 text-xs;
+  }
+  .btn-ic {
+    @apply w-7 h-7 p-0 text-ink-500 hover:text-ink-900;
+  }
+  .input,
+  .input-mono {
+    @apply h-8 w-full px-2 border border-ink-200 bg-ink-0 text-ink-900 text-[13px] focus:outline-none focus:border-ink-900;
+  }
+  .input-mono {
+    @apply font-mono text-xs;
+  }
+  select.input {
+    appearance: none;
+    padding-right: 26px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b6b75' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 6px center;
   }
   .field-label {
     @apply block text-xs uppercase tracking-wide text-ink-500 mb-1;
   }
-  .table-cell {
-    @apply py-2 pr-4 align-middle;
+  .hint {
+    @apply text-xs text-ink-500 mt-1;
+  }
+  .chk {
+    @apply flex items-center gap-2 text-[13px];
+  }
+  .chk input {
+    @apply w-3.5 h-3.5 m-0 accent-ink-900;
+  }
+  .search {
+    @apply relative w-60;
+  }
+  .search .input {
+    padding-left: 30px;
+  }
+  .search svg {
+    @apply absolute left-2 top-2 text-ink-500 pointer-events-none;
+  }
+
+  /* Segmented control: chart ranges, log categories, role switch. */
+  .seg {
+    @apply inline-flex border border-ink-200;
+  }
+  .seg button {
+    @apply h-7 px-2.5 border-0 border-r border-ink-200 bg-ink-0 text-ink-500 text-xs cursor-pointer hover:text-ink-900 last:border-r-0;
+  }
+  .seg button[aria-pressed="true"] {
+    @apply bg-ink-900 text-ink-0;
+  }
+
+  /* Badges: Public and Admin are the only states meant to draw the eye. */
+  .badge,
+  .badge-muted {
+    @apply inline-block px-1.5 leading-4 border border-ink-900 text-[10px] tracking-wide uppercase whitespace-nowrap;
+  }
+  .badge-muted {
+    @apply border-ink-300 text-ink-500;
+  }
+
+  /* Tooltip: pure CSS, ~60ms instead of the browser's ~1s title delay. */
+  .tt {
+    position: relative;
+  }
+  .tt::after {
+    content: attr(data-tip);
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 6px);
+    transform: translateX(-50%);
+    background: var(--color-ink-900);
+    color: var(--color-ink-0);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    line-height: 1.35;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    padding: 5px 8px;
+    white-space: pre;
+    text-align: left;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 80ms ease 60ms;
+    z-index: 30;
+  }
+  .tt:hover::after,
+  .tt:focus-visible::after,
+  .tt-on::after {
+    opacity: 1;
+  }
+  .tt-right::after {
+    left: calc(100% + 8px);
+    bottom: auto;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  .tt-below::after {
+    bottom: auto;
+    top: calc(100% + 6px);
+  }
+  .tt-end::after {
+    left: auto;
+    right: 0;
+    transform: none;
+  }
+
+  /* Tables: quiet header, hover surface, actions revealed on hover/focus. */
+  .tbl {
+    @apply w-full border-collapse text-[13px];
+  }
+  .tbl th {
+    @apply text-left font-normal text-xs text-ink-500 pb-2 pr-4 border-b border-ink-200 whitespace-nowrap;
+  }
+  .tbl td {
+    @apply py-2 pr-4 border-b border-ink-100 align-middle h-11;
+  }
+  .tbl th:last-child,
+  .tbl td:last-child {
+    padding-right: 0;
+  }
+  .tbl tbody tr:hover td,
+  .tbl tbody tr:focus-within td {
+    @apply bg-ink-50;
+  }
+  .tbl .acts {
+    @apply flex justify-end gap-0.5 opacity-0;
+  }
+  .tbl tbody tr:hover .acts,
+  .tbl tbody tr:focus-within .acts {
+    @apply opacity-100;
+  }
+  .tbl .acts .tt::after {
+    left: auto;
+    right: 0;
+    transform: none;
+  }
+  .tbl .num {
+    @apply text-right tabular-nums;
+  }
+
+  /* Page furniture */
+  .ph {
+    @apply flex items-start justify-between gap-6 mb-6;
+  }
+  .ph h1 {
+    @apply text-base font-medium leading-6 flex items-center gap-2.5;
+  }
+  .ph p {
+    @apply text-xs text-ink-500 mt-0.5;
+  }
+  .crumb {
+    @apply flex items-center gap-1.5 text-xs text-ink-500 mb-2;
+  }
+  .crumb a,
+  .crumb button {
+    @apply text-ink-500 hover:text-ink-900 hover:underline;
+  }
+  .crumb .here {
+    @apply text-ink-900 font-mono break-all;
+  }
+  .sec {
+    @apply grid gap-10 py-6 border-t border-ink-100 first:border-t-0 first:pt-0;
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+  .sec h2 {
+    @apply text-sm font-medium;
+  }
+  .sec .desc {
+    @apply text-xs text-ink-500 mt-1;
+  }
+  .form {
+    @apply flex flex-col gap-3.5 max-w-md;
+  }
+  .form .row {
+    @apply flex gap-2 items-start;
+  }
+  .dl {
+    @apply grid gap-x-3 gap-y-1.5 text-xs;
+    grid-template-columns: 120px minmax(0, 1fr);
+  }
+  .dl dt {
+    @apply text-ink-500;
+  }
+  .dl dd {
+    @apply m-0 font-mono break-all;
+  }
+
+  /* Feedback */
+  .ok {
+    @apply inline-flex items-center gap-1.5 text-xs text-ink-500;
+  }
+  .note {
+    @apply text-xs border border-ink-900 px-3 py-2;
+  }
+  .empty {
+    @apply border border-dashed border-ink-200 px-6 py-10 text-center flex flex-col items-center gap-2.5;
+  }
+  .empty p {
+    @apply text-[13px] text-ink-500;
+  }
+  .sel-bar {
+    @apply flex items-center gap-2 h-10 px-3 bg-ink-100 text-xs mb-3;
+  }
+
+  /* Overlays: native <dialog> gives focus trapping and Escape for free. */
+  .dlg {
+    @apply bg-ink-0 text-ink-900 border border-ink-200 w-[420px] max-w-full p-6 pt-5 m-auto;
+  }
+  .dlg::backdrop {
+    background: rgba(10, 10, 12, 0.4);
+  }
+  .dlg h2 {
+    @apply text-sm font-medium mb-1.5;
+  }
+  .dlg p {
+    @apply text-xs text-ink-500;
+  }
+  .dlg .btns {
+    @apply flex justify-end gap-2 mt-5;
+  }
+  .drawer {
+    @apply fixed top-0 right-0 bottom-0 left-auto h-full max-h-full w-[480px] max-w-full m-0 p-0 bg-ink-0 text-ink-900 border-l border-ink-200;
+  }
+  /* The UA hides a closed <dialog> with display:none; only override it while open. */
+  .drawer[open] {
+    @apply flex flex-col;
+  }
+  .drawer::backdrop {
+    background: rgba(10, 10, 12, 0.4);
+  }
+  .drawer .hd {
+    @apply h-14 px-6 border-b border-ink-200 flex items-center justify-between;
+  }
+  .drawer .hd h2 {
+    @apply text-sm font-medium;
+  }
+  .drawer .bd {
+    @apply p-6 pt-5 flex flex-col gap-5 overflow-auto flex-1;
+  }
+  .drawer .ft {
+    @apply px-6 py-3 border-t border-ink-200 flex justify-end gap-2;
+  }
+
+  /* Shell */
+  .side {
+    @apply w-52 shrink-0 bg-ink-50 border-r border-ink-200 flex flex-col;
+  }
+  .side .brand {
+    @apply h-12 flex items-center px-5 font-mono text-[13px] border-b border-ink-200;
+  }
+  .side nav {
+    @apply flex flex-col p-2 pt-3 gap-0.5;
+  }
+  .side nav a {
+    @apply flex items-center h-8 px-3 text-ink-500 text-[13px] hover:text-ink-900;
+  }
+  .side nav a[aria-current="page"] {
+    @apply text-ink-900 bg-ink-100;
+  }
+  .side .foot {
+    @apply mt-auto p-2 pb-4 border-t border-ink-200 flex flex-col gap-0.5;
+  }
+
+  /* Request chart */
+  .plot {
+    @apply h-40 flex items-stretch gap-0.5 border-b border-ink-200;
+    background: repeating-linear-gradient(to top, transparent 0 79px, var(--color-ink-100) 79px 80px);
+  }
+  .plot .bar {
+    @apply flex-1 min-w-0 flex flex-col justify-end cursor-default;
+  }
+  .plot .bar:hover > div {
+    filter: brightness(0.85);
+  }
+  .plot .bar:nth-child(-n + 4) > .tt::after {
+    left: 0;
+    transform: none;
+  }
+  .plot .bar:nth-last-child(-n + 4) > .tt::after {
+    left: auto;
+    right: 0;
+    transform: none;
+  }
+  .stat-grid {
+    @apply grid border border-ink-200;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .stat {
+    @apply p-4 pt-3.5 border-r border-ink-200 last:border-r-0;
+  }
+  .stat .l {
+    @apply inline-flex items-center gap-1 text-xs text-ink-500;
+  }
+  .stat .v {
+    @apply text-[22px] leading-7 mt-1 tabular-nums;
   }
 }

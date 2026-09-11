@@ -16,8 +16,8 @@ export const adminHeaders = {
 // Used by every authenticated spec; the auth spec exercises the form directly.
 export async function login(page: Page, ak = ADMIN_AK, sk = ADMIN_SK): Promise<void> {
   await page.goto('/login');
-  await page.getByLabel('Access key').fill(ak);
-  await page.getByLabel('Secret').fill(sk);
+  await page.getByLabel('Access key ID').fill(ak);
+  await page.getByLabel('Secret access key').fill(sk);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
 }

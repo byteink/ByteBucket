@@ -20,6 +20,7 @@ import (
 	"ByteBucket/internal/router"
 	"ByteBucket/internal/sampler"
 	"ByteBucket/internal/storage"
+	"ByteBucket/internal/webui"
 )
 
 // shutdownTimeout bounds how long in-flight requests get to drain before the
@@ -257,7 +258,10 @@ func run(ctx context.Context) error {
 	// defaults to the local storage port so presign and public links work out
 	// of the box on localhost; remapped ports or a TLS-terminating proxy need
 	// an explicit value.
-	handlers.SetPublicBaseURL(resolvePublicBaseURL())
+	publicBase := resolvePublicBaseURL()
+	handlers.SetPublicBaseURL(publicBase)
+	// The SPA's CSP must admit that origin or presigned previews cannot load.
+	webui.SetMediaOrigin(publicBase)
 
 	// Object-write durability defaults ON: a PUT/Copy is fsync'd before the
 	// response returns. SYNC_WRITES=false trades that for throughput. A persisted

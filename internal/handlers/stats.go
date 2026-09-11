@@ -14,8 +14,9 @@ import (
 
 // bucketSize is a single bucket's accurate on-disk byte total.
 type bucketSize struct {
-	Name  string `json:"name"`
-	Bytes int64  `json:"bytes"`
+	Name    string `json:"name"`
+	Bytes   int64  `json:"bytes"`
+	Objects int64  `json:"objects"`
 }
 
 // bucketRow is one bucket's row in the dashboard: on-disk size plus its
@@ -23,6 +24,7 @@ type bucketSize struct {
 type bucketRow struct {
 	Name      string  `json:"name"`
 	Bytes     int64   `json:"bytes"`
+	Objects   int64   `json:"objects"`
 	Uploads   float64 `json:"uploads"`
 	Downloads float64 `json:"downloads"`
 	Deletes   float64 `json:"deletes"`
@@ -32,13 +34,13 @@ type bucketRow struct {
 // walk of the objects store; activity is real S3 object operations per bucket
 // (not the admin-dominated HTTP request counter).
 type statsDTO struct {
-	Buckets             int64                    `json:"buckets"`
-	Objects             int64                    `json:"objects"`
-	Bytes               int64                    `json:"bytes"`
-	MultipartInProgress float64                   `json:"multipartInProgress"`
-	Activity            middleware.BucketActivity `json:"activity"`
+	Buckets             int64                      `json:"buckets"`
+	Objects             int64                      `json:"objects"`
+	Bytes               int64                      `json:"bytes"`
+	MultipartInProgress float64                    `json:"multipartInProgress"`
+	Activity            middleware.BucketActivity  `json:"activity"`
 	Requests            middleware.RequestOutcomes `json:"requests"`
-	PerBucket           []bucketRow               `json:"perBucket"`
+	PerBucket           []bucketRow                `json:"perBucket"`
 }
 
 // GetStatsHandler returns the dashboard summary: storage footprint plus real
@@ -66,7 +68,7 @@ func GetStatsHandler(c *gin.Context) {
 	rows := make([]bucketRow, 0, len(sizes))
 	for _, s := range sizes {
 		bytes += s.Bytes
-		r := bucketRow{Name: s.Name, Bytes: s.Bytes}
+		r := bucketRow{Name: s.Name, Bytes: s.Bytes, Objects: s.Objects}
 		if a := activity[s.Name]; a != nil {
 			r.Uploads, r.Downloads, r.Deletes = a.Uploads, a.Downloads, a.Deletes
 		}
@@ -106,7 +108,7 @@ func computeStorageStats() (perBucket []bucketSize, objects int64, err error) {
 			return nil, 0, walkErr
 		}
 		objects += o
-		perBucket = append(perBucket, bucketSize{Name: e.Name(), Bytes: b})
+		perBucket = append(perBucket, bucketSize{Name: e.Name(), Bytes: b, Objects: o})
 	}
 	return perBucket, objects, nil
 }

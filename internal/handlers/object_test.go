@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/goccy/go-json"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -239,5 +241,39 @@ func TestHeadObjectAdvertisesAcceptRanges(t *testing.T) {
 	}
 	if got := w.Header().Get("Accept-Ranges"); got != "bytes" {
 		t.Fatalf("HEAD Accept-Ranges = %q; want %q", got, "bytes")
+	}
+}
+
+// The sidecar only records what the client sent, so an object written without
+// Last-Modified must still report one: the file's own mtime, on HEAD and in
+// the JSON metadata body the admin UI reads.
+func TestObjectMetadataBackfillsLastModifiedFromFile(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withTempObjectsRoot(t)
+	seedObject(t, "lmbkt", "obj.bin", []byte("payload"))
+
+	head := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(head)
+	c.Params = gin.Params{{Key: "bucket", Value: "lmbkt"}, {Key: "objectKey", Value: "/obj.bin"}}
+	c.Request = httptest.NewRequest(http.MethodHead, "/lmbkt/obj.bin", nil)
+	GetObjectMetadataHandler(c)
+	if head.Code != http.StatusOK {
+		t.Fatalf("HEAD status = %d", head.Code)
+	}
+	if _, err := http.ParseTime(head.Header().Get("Last-Modified")); err != nil {
+		t.Fatalf("HEAD Last-Modified %q not an HTTP date: %v", head.Header().Get("Last-Modified"), err)
+	}
+
+	get := httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(get)
+	c.Params = gin.Params{{Key: "bucket", Value: "lmbkt"}, {Key: "objectKey", Value: "/obj.bin"}}
+	c.Request = httptest.NewRequest(http.MethodGet, "/lmbkt/obj.bin", nil)
+	GetObjectMetadataHandler(c)
+	var body map[string]string
+	if err := json.Unmarshal(get.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, err := http.ParseTime(body["last-modified"]); err != nil {
+		t.Fatalf("JSON last-modified %q not an HTTP date: %v", body["last-modified"], err)
 	}
 }

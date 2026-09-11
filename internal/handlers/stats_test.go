@@ -18,8 +18,8 @@ func TestStats_CountsObjectsAndBytesExcludingSidecars(t *testing.T) {
 	// Two buckets, three objects, known sizes. Tagging/ACL add sidecars that
 	// must NOT be counted as objects.
 	seedObject(t, "b1", "a.txt", []byte("12345"))      // 5 bytes
-	seedObject(t, "b1", "nested/b.txt", []byte("678"))  // 3 bytes
-	seedObject(t, "b2", "c.txt", []byte("90"))          // 2 bytes
+	seedObject(t, "b1", "nested/b.txt", []byte("678")) // 3 bytes
+	seedObject(t, "b2", "c.txt", []byte("90"))         // 2 bytes
 
 	perBucket, objects, err := computeStorageStats()
 	if err != nil {
@@ -100,9 +100,9 @@ func TestStatsHandler_PerBucketSortedBySizeWithActivity(t *testing.T) {
 	withTempObjectsRoot(t)
 	// seedObject uploads via the real handler, so each seed records one upload
 	// for its bucket — exactly the per-bucket activity the dashboard surfaces.
-	seedObject(t, "act-small", "a", []byte("x"))          // 1 byte
-	seedObject(t, "act-big", "a", []byte("xxxxxxxxxx"))   // 10 bytes
-	seedObject(t, "act-medium", "a", []byte("xxxxx"))     // 5 bytes
+	seedObject(t, "act-small", "a", []byte("x"))        // 1 byte
+	seedObject(t, "act-big", "a", []byte("xxxxxxxxxx")) // 10 bytes
+	seedObject(t, "act-medium", "a", []byte("xxxxx"))   // 5 bytes
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -125,5 +125,30 @@ func TestStatsHandler_PerBucketSortedBySizeWithActivity(t *testing.T) {
 	}
 	if dto.Activity.Uploads < 3 {
 		t.Fatalf("expected total uploads >= 3, got %v", dto.Activity.Uploads)
+	}
+}
+
+func TestStatsHandler_PerBucketObjectCount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withTempObjectsRoot(t)
+	seedObject(t, "cnt-two", "a", []byte("x"))
+	seedObject(t, "cnt-two", "nested/b", []byte("xx"))
+	seedObject(t, "cnt-one", "a", []byte("xxxxxxxx"))
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	GetStatsHandler(c)
+
+	var dto statsDTO
+	if err := json.Unmarshal(w.Body.Bytes(), &dto); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got := map[string]int64{}
+	for _, r := range dto.PerBucket {
+		got[r.Name] = r.Objects
+	}
+	if got["cnt-two"] != 2 || got["cnt-one"] != 1 {
+		t.Fatalf("per-bucket objects=%v want cnt-two=2 cnt-one=1", got)
 	}
 }

@@ -519,6 +519,14 @@ func GetObjectMetadataHandler(c *gin.Context) {
 		return
 	}
 
+	// The sidecar only records what the client sent; the file's own mtime is
+	// the authoritative Last-Modified when the upload carried none.
+	if !hasMetaKey(metadata, "last-modified") {
+		if info, statErr := os.Stat(objectPath); statErr == nil {
+			metadata["last-modified"] = info.ModTime().UTC().Format(http.TimeFormat)
+		}
+	}
+
 	// Backfill the ETag in-place so HEAD responses and the JSON body always
 	// include it, even for objects predating ETag persistence.
 	if tag := metadata[etagMetaKey]; tag == "" {
@@ -540,4 +548,15 @@ func GetObjectMetadataHandler(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, metadata)
+}
+
+// hasMetaKey reports whether the sidecar carries the header, whatever case
+// the uploading client used for it.
+func hasMetaKey(metadata map[string]string, name string) bool {
+	for k := range metadata {
+		if strings.EqualFold(k, name) {
+			return true
+		}
+	}
+	return false
 }

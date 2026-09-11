@@ -140,6 +140,7 @@ export interface RequestOutcomes {
 export interface BucketRow {
   name: string;
   bytes: number;
+  objects: number;
   uploads: number;
   downloads: number;
   deletes: number;

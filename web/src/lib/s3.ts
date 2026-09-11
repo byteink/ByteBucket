@@ -78,6 +78,33 @@ function encPath(parts: string[]): string {
   return parts.map((p) => encodeURIComponent(p)).join('/');
 }
 
+// downloadObject fetches the body through the authenticated admin surface and
+// hands it to the browser as a file download named after the key's last segment.
+export async function downloadObject(s: Session, bucket: string, key: string): Promise<void> {
+  const blob = await getObject(s, bucket, key);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = key.split('/').pop() ?? key;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// The public S3 surface sits on its own port behind the operator's proxy, so
+// without PUBLIC_BASE_URL the best guess is the dashboard host without a port.
+export function publicObjectURL(publicBaseURL: string, bucket: string, key: string): string {
+  const base = publicBaseURL || `${globalThis.location.protocol}//${globalThis.location.hostname}`;
+  return `${base}/${encodeURIComponent(bucket)}/${encodeKeyPath(key)}`;
+}
+
+// encodeKeyPath encodes each segment of an object key so slashes survive as
+// path separators while everything else is percent-encoded.
+export function encodeKeyPath(key: string): string {
+  return encPath(key.split('/'));
+}
+
 export interface ServerConfig {
   publicBaseURL: string;
 }

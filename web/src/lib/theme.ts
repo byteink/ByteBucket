@@ -1,6 +1,6 @@
 // Theme preference: "system" follows the OS, "light"/"dark" pin a choice.
 // The actual flip is just the `dark` class on <html>; every ink-* token is
-// remapped under html.dark in styles.css. The boot snippet in index.html
+// remapped under html.dark in styles.css. The boot script in web/public/theme.js
 // applies the same logic before first paint, so keep the storage key and the
 // resolution rule in sync with it.
 export type Theme = 'system' | 'light' | 'dark';
