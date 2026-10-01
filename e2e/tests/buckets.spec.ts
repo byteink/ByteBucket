@@ -20,8 +20,10 @@ test.describe('buckets management', () => {
     const dialog = page.getByRole('dialog');
     const row = page.getByRole('row').filter({ hasText: name });
 
-    // Create: the primary button stays disabled until the name is valid.
-    await page.getByRole('button', { name: 'New bucket' }).click();
+    // Create: the primary button stays disabled until the name is valid. An
+    // empty store also renders a "New bucket" call to action in the empty
+    // state, so target the page header's button, which is always present.
+    await page.locator('.ph').getByRole('button', { name: 'New bucket' }).click();
     await expect(dialog.getByRole('button', { name: 'Create bucket' })).toBeDisabled();
     await dialog.getByLabel('Name').fill(name);
     await dialog.getByRole('button', { name: 'Create bucket' }).click();
