@@ -58,7 +58,10 @@ func resolveObjectForTagging(c *gin.Context) (string, bool) {
 		respondError(c, http.StatusBadRequest, "InvalidRequest", "Bucket and key required")
 		return "", false
 	}
-	objectPath := filepath.Join(objectsRoot, bucket, key)
+	objectPath, ok := resolvePath(c, bucket, key)
+	if !ok {
+		return "", false
+	}
 	if info, err := os.Stat(objectPath); err != nil || info.IsDir() {
 		respondError(c, http.StatusNotFound, "NoSuchKey", "Object not found")
 		return "", false

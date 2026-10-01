@@ -3,7 +3,6 @@ package storage
 import (
 	"errors"
 	"os"
-	"path/filepath"
 
 	"github.com/goccy/go-json"
 )
@@ -40,14 +39,18 @@ var ObjectsRoot = "/data/objects"
 // file lives inside the bucket directory as a hidden sidecar, matching the
 // .meta convention used for per-object metadata. Storing it inside the
 // bucket dir means deleting the bucket also drops its CORS config atomically.
-func bucketCORSPath(bucket string) string {
-	return filepath.Join(ObjectsRoot, bucket, ".cors.json")
+func bucketCORSPath(bucket string) (string, error) {
+	return SafeJoin(ObjectsRoot, bucket, ".cors.json")
 }
 
 // GetBucketCORS reads the CORS config for a bucket. Returns
 // ErrNoSuchCORSConfiguration when no config has been set.
 func GetBucketCORS(bucket string) (*BucketCORSConfig, error) {
-	data, err := os.ReadFile(bucketCORSPath(bucket))
+	path, err := bucketCORSPath(bucket)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, ErrNoSuchCORSConfiguration
@@ -74,7 +77,10 @@ func PutBucketCORS(bucket string, cfg *BucketCORSConfig) error {
 	}
 	// Write via temp + rename so a crashed write never leaves a partially
 	// truncated config file that would fail to parse on the next request.
-	path := bucketCORSPath(bucket)
+	path, err := bucketCORSPath(bucket)
+	if err != nil {
+		return err
+	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return err
@@ -86,7 +92,11 @@ func PutBucketCORS(bucket string, cfg *BucketCORSConfig) error {
 // ErrNoSuchCORSConfiguration when none exists, so callers can surface a 404
 // to the client instead of a bare success that would mask state errors.
 func DeleteBucketCORS(bucket string) error {
-	err := os.Remove(bucketCORSPath(bucket))
+	path, err := bucketCORSPath(bucket)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(path)
 	if err == nil {
 		return nil
 	}

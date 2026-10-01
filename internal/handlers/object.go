@@ -44,7 +44,10 @@ func UploadObjectHandler(c *gin.Context) {
 		metadata["acl"] = cannedACL
 	}
 
-	dstPath := filepath.Join(objectsRoot, bucketName, objectKey)
+	dstPath, ok := resolveObjectPath(c, bucketName, objectKey)
+	if !ok {
+		return
+	}
 
 	// Optimistic-concurrency preconditions: If-None-Match:* (create-only) and
 	// If-Match:<etag> (overwrite-only-if-unchanged) are evaluated against the
@@ -226,7 +229,10 @@ func DownloadObjectHandler(c *gin.Context) {
 	bucketName := c.Param("bucket")
 	objectKey := c.Param("objectKey")
 	objectKey = filepath.Clean(objectKey)
-	filePath := filepath.Join(objectsRoot, bucketName, objectKey)
+	filePath, ok := resolveObjectPath(c, bucketName, objectKey)
+	if !ok {
+		return
+	}
 
 	info, err := os.Stat(filePath)
 	if err != nil {
@@ -445,7 +451,16 @@ func DeleteObjectHandler(c *gin.Context) {
 // failure is returned. Shared by single DeleteObject and batch DeleteObjects so
 // the gauge/sidecar/dir-collapse contract lives in exactly one place.
 func removeObject(bucketName, objectKey string) error {
-	filePath := filepath.Join(objectsRoot, bucketName, objectKey)
+	// Resolve the key against its own bucket so the directory collapse below
+	// can never walk past bucketDir into a sibling bucket or the root.
+	bucketDir, err := storage.SafeJoin(objectsRoot, bucketName)
+	if err != nil {
+		return err
+	}
+	filePath, err := storage.SafeJoin(bucketDir, strings.TrimPrefix(objectKey, "/"))
+	if err != nil {
+		return err
+	}
 	// Same stripe lock as finalizeObjectWrite so a delete cannot land between a
 	// concurrent write's object rename and its sidecar write.
 	defer lockObjectPath(filePath)()
@@ -471,7 +486,6 @@ func removeObject(bucketName, objectKey string) error {
 	// the first non-empty dir or any error so we never remove unrelated
 	// content or the bucket root itself.
 	parentDir := filepath.Dir(filePath)
-	bucketDir := filepath.Join(objectsRoot, bucketName)
 	for parentDir != bucketDir && parentDir != "/" {
 		entries, err := os.ReadDir(parentDir)
 		if err != nil || len(entries) > 0 {
@@ -494,7 +508,10 @@ func GetObjectMetadataHandler(c *gin.Context) {
 	objectKey := c.Param("objectKey")
 	objectKey = filepath.Clean(objectKey)
 
-	objectPath := filepath.Join(objectsRoot, bucketName, objectKey)
+	objectPath, ok := resolveObjectPath(c, bucketName, objectKey)
+	if !ok {
+		return
+	}
 	metadataPath := objectPath + ".meta"
 
 	// Same nosniff guard as DownloadObjectHandler — HEAD must mirror the

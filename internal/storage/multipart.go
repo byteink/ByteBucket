@@ -41,7 +41,7 @@ const (
 var UploadsRoot = "/data/uploads"
 
 // MultipartUpload is the in-memory view of an in-progress upload. It mirrors
-// the manifest.json shape on disk; see manifestPath / writeManifest.
+// the manifest.json shape on disk; see writeManifest.
 type MultipartUpload struct {
 	UploadID  string            `json:"uploadId"`
 	Bucket    string            `json:"bucket"`
@@ -67,19 +67,22 @@ type UploadedPart struct {
 //
 // Keyed by uploadID (a UUID) rather than key because S3 permits multiple
 // concurrent uploads against the same key and we must not collide them.
-func uploadDir(bucket, uploadID string) string {
-	return filepath.Join(UploadsRoot, bucket, uploadID)
+// The uploadId query parameter is client-supplied and not run through
+// ValidateNames, so containment here is the only thing keeping it inside
+// UploadsRoot.
+func uploadDir(bucket, uploadID string) (string, error) {
+	return SafeJoin(UploadsRoot, bucket, uploadID)
 }
 
-func manifestPath(bucket, uploadID string) string {
-	return filepath.Join(uploadDir(bucket, uploadID), "manifest.json")
+func manifestPath(dir string) string {
+	return filepath.Join(dir, "manifest.json")
 }
 
 // partPath returns the part file path. Zero-padding keeps lexical sort order
 // identical to numeric sort order, which matters for the Complete streaming
 // step (we iterate ReadDir and must concatenate in partNumber order).
-func partPath(bucket, uploadID string, partNumber int) string {
-	return filepath.Join(uploadDir(bucket, uploadID), fmt.Sprintf("%05d", partNumber))
+func partPath(dir string, partNumber int) string {
+	return filepath.Join(dir, fmt.Sprintf("%05d", partNumber))
 }
 
 // CreateMultipartUpload allocates a new upload ID and persists the manifest.
@@ -96,25 +99,29 @@ func CreateMultipartUpload(bucket, key string, metadata map[string]string) (*Mul
 		Initiated: time.Now().UTC(),
 		Metadata:  metadata,
 	}
-	if err := os.MkdirAll(uploadDir(bucket, up.UploadID), 0755); err != nil {
+	dir, err := uploadDir(bucket, up.UploadID)
+	if err != nil {
 		return nil, err
 	}
-	if err := writeManifest(up); err != nil {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, err
+	}
+	if err := writeManifest(dir, up); err != nil {
 		// Best-effort cleanup: a stuck empty dir would be visible as a ghost
 		// upload in ListMultipartUploads forever, which is worse than losing
 		// the create entirely.
-		_ = os.RemoveAll(uploadDir(bucket, up.UploadID))
+		_ = os.RemoveAll(dir)
 		return nil, err
 	}
 	return up, nil
 }
 
-func writeManifest(up *MultipartUpload) error {
+func writeManifest(dir string, up *MultipartUpload) error {
 	data, err := json.MarshalIndent(up, "", "  ")
 	if err != nil {
 		return err
 	}
-	path := manifestPath(up.Bucket, up.UploadID)
+	path := manifestPath(dir)
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return err
@@ -126,24 +133,37 @@ func writeManifest(up *MultipartUpload) error {
 // ErrNoSuchUpload when the upload dir is absent so handlers can map to a 404
 // without parsing a stringly-typed error.
 func GetMultipartUpload(bucket, key, uploadID string) (*MultipartUpload, error) {
-	data, err := os.ReadFile(manifestPath(bucket, uploadID))
+	up, _, err := openUpload(bucket, key, uploadID)
+	return up, err
+}
+
+// openUpload loads and checks an upload's manifest and returns its staging
+// directory, so every operation on the upload resolves the path exactly once.
+// An upload ID that cannot be contained is reported as ErrNoSuchUpload: from
+// the client's side it names no upload, and S3 answers NoSuchUpload for it.
+func openUpload(bucket, key, uploadID string) (*MultipartUpload, string, error) {
+	dir, err := uploadDir(bucket, uploadID)
+	if err != nil {
+		return nil, "", ErrNoSuchUpload
+	}
+	data, err := os.ReadFile(manifestPath(dir))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, ErrNoSuchUpload
+			return nil, "", ErrNoSuchUpload
 		}
-		return nil, err
+		return nil, "", err
 	}
 	var up MultipartUpload
 	if err := json.Unmarshal(data, &up); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	// Defensive: manifest belongs to the caller's key. Mismatches should never
 	// happen in prod (uploadID is unique) but catching it here prevents a
 	// caller with one upload ID from completing against a different key.
 	if up.Key != key || up.Bucket != bucket {
-		return nil, ErrNoSuchUpload
+		return nil, "", ErrNoSuchUpload
 	}
-	return &up, nil
+	return &up, dir, nil
 }
 
 // UploadPart streams the part body to disk under a temp name, hashes it for
@@ -155,10 +175,11 @@ func UploadPart(bucket, key, uploadID string, partNumber int, body io.Reader) (*
 		return nil, ErrInvalidPartRange
 	}
 	// Validate the upload exists before spending disk writes on a dead ID.
-	if _, err := GetMultipartUpload(bucket, key, uploadID); err != nil {
+	_, dir, err := openUpload(bucket, key, uploadID)
+	if err != nil {
 		return nil, err
 	}
-	dst := partPath(bucket, uploadID, partNumber)
+	dst := partPath(dir, partNumber)
 	tmp := dst + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {
@@ -193,10 +214,15 @@ func UploadPart(bucket, key, uploadID string, partNumber int, body io.Reader) (*
 // the SDK during Complete to sanity-check what it uploaded and by the ListParts
 // API directly.
 func ListParts(bucket, key, uploadID string) ([]UploadedPart, error) {
-	if _, err := GetMultipartUpload(bucket, key, uploadID); err != nil {
+	_, dir, err := openUpload(bucket, key, uploadID)
+	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(uploadDir(bucket, uploadID))
+	return listParts(dir)
+}
+
+func listParts(dir string) ([]UploadedPart, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +245,7 @@ func ListParts(bucket, key, uploadID string) ([]UploadedPart, error) {
 		if err != nil {
 			return nil, err
 		}
-		etag, err := partETag(bucket, uploadID, pn)
+		etag, err := partETag(dir, pn)
 		if err != nil {
 			return nil, err
 		}
@@ -236,8 +262,8 @@ func ListParts(bucket, key, uploadID string) ([]UploadedPart, error) {
 
 // partETag rehashes a stored part. Cheap relative to the upload itself and
 // avoids maintaining a parallel etag sidecar that could drift from the bytes.
-func partETag(bucket, uploadID string, partNumber int) (string, error) {
-	f, err := os.Open(partPath(bucket, uploadID, partNumber))
+func partETag(dir string, partNumber int) (string, error) {
+	f, err := os.Open(partPath(dir, partNumber))
 	if err != nil {
 		return "", err
 	}
@@ -262,7 +288,7 @@ func partETag(bucket, uploadID string, partNumber int) (string, error) {
 // Ordering contract: expectedParts must be strictly ascending by PartNumber.
 // S3 returns InvalidPartOrder otherwise; we mirror it.
 func CompleteMultipartUpload(bucket, key, uploadID string, expectedParts []UploadedPart) (string, int64, error) {
-	up, err := GetMultipartUpload(bucket, key, uploadID)
+	up, dir, err := openUpload(bucket, key, uploadID)
 	if err != nil {
 		return "", 0, err
 	}
@@ -280,7 +306,7 @@ func CompleteMultipartUpload(bucket, key, uploadID string, expectedParts []Uploa
 	// Resolve each expected part by matching on-disk ETag. A mismatch is a
 	// client-observable InvalidPart (the client committed to bytes we cannot
 	// reproduce) — do not silently succeed.
-	stored, err := ListParts(bucket, key, uploadID)
+	stored, err := listParts(dir)
 	if err != nil {
 		return "", 0, err
 	}
@@ -300,7 +326,10 @@ func CompleteMultipartUpload(bucket, key, uploadID string, expectedParts []Uploa
 
 	// Stream-concatenate into the final object path using a temp file + rename
 	// so a mid-concat crash never leaves a partial object at the target path.
-	finalPath := filepath.Join(ObjectsRoot, bucket, key)
+	finalPath, err := SafeJoin(ObjectsRoot, bucket, key)
+	if err != nil {
+		return "", 0, err
+	}
 	if err := os.MkdirAll(filepath.Dir(finalPath), 0755); err != nil {
 		return "", 0, err
 	}
@@ -312,7 +341,7 @@ func CompleteMultipartUpload(bucket, key, uploadID string, expectedParts []Uploa
 	composite := md5.New()
 	var total int64
 	for _, want := range expectedParts {
-		n, partMD5, err := streamPart(out, bucket, uploadID, want.PartNumber)
+		n, partMD5, err := streamPart(out, dir, want.PartNumber)
 		if err != nil {
 			_ = out.Close()
 			_ = os.Remove(tmp)
@@ -353,7 +382,7 @@ func CompleteMultipartUpload(bucket, key, uploadID string, expectedParts []Uploa
 	// UploadsRoot but does NOT fail the complete call: from the client's point
 	// of view the object now exists; the staging dir becomes a janitorial
 	// concern rather than a failure mode.
-	_ = os.RemoveAll(uploadDir(bucket, uploadID))
+	_ = os.RemoveAll(dir)
 
 	return finalETag, total, nil
 }
@@ -362,8 +391,8 @@ func CompleteMultipartUpload(bucket, key, uploadID string, expectedParts []Uploa
 // bytes of the part. Returning the raw 16-byte digest (not the hex-quoted
 // ETag) is deliberate: the composite ETag formula concatenates the RAW bytes
 // of each part's MD5, then hashes that blob.
-func streamPart(out io.Writer, bucket, uploadID string, partNumber int) (int64, []byte, error) {
-	f, err := os.Open(partPath(bucket, uploadID, partNumber))
+func streamPart(out io.Writer, dir string, partNumber int) (int64, []byte, error) {
+	f, err := os.Open(partPath(dir, partNumber))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, nil, ErrInvalidPart
@@ -389,17 +418,21 @@ func normalizeETag(s string) string {
 // missing upload returns ErrNoSuchUpload so the handler can distinguish
 // "already cleaned up" from "never existed" when the client wants to know.
 func AbortMultipartUpload(bucket, key, uploadID string) error {
-	if _, err := GetMultipartUpload(bucket, key, uploadID); err != nil {
+	_, dir, err := openUpload(bucket, key, uploadID)
+	if err != nil {
 		return err
 	}
-	return os.RemoveAll(uploadDir(bucket, uploadID))
+	return os.RemoveAll(dir)
 }
 
 // ListMultipartUploads enumerates in-progress uploads in a bucket. Order is
 // not guaranteed by S3 and we do not fabricate one; callers that need a
 // stable ordering sort by Initiated at the edge.
 func ListMultipartUploads(bucket string) ([]*MultipartUpload, error) {
-	bucketDir := filepath.Join(UploadsRoot, bucket)
+	bucketDir, err := SafeJoin(UploadsRoot, bucket)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(bucketDir)
 	if err != nil {
 		if os.IsNotExist(err) {

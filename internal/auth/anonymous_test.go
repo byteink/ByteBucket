@@ -161,3 +161,16 @@ func TestAnonymous_HeadPublicObject_Allowed(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 }
+
+// The ACL lookup builds a filesystem path from the URL. A key that climbs out
+// of a public bucket must not borrow that bucket's ACL for an object stored in
+// a private one, even if ValidateNames is not in front of the middleware.
+func TestAnonymousGet_KeyEscapingPublicBucket_Denied(t *testing.T) {
+	withAnonymousFixtures(t)
+	r := newAnonymousRouter()
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/pub/..%2Fpriv%2Fx.txt", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous read escaped into private bucket: got %d, want 401", w.Code)
+	}
+}

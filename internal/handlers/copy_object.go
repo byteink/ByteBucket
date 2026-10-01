@@ -39,7 +39,10 @@ func CopyObjectHandler(c *gin.Context) {
 		return
 	}
 
-	srcPath := filepath.Join(objectsRoot, srcBucket, srcKey)
+	srcPath, ok := resolvePath(c, srcBucket, srcKey)
+	if !ok {
+		return
+	}
 	if info, err := os.Stat(srcPath); err != nil || info.IsDir() {
 		respondError(c, http.StatusNotFound, "NoSuchKey", "Source object not found")
 		return
@@ -85,7 +88,10 @@ func CopyObjectHandler(c *gin.Context) {
 	// finalizeObjectWrite writes to a temp file and renames, so a self-copy
 	// (dstPath == srcPath) reads the original bytes via the open handle above
 	// while the new content lands in a separate inode before the rename.
-	dstPath := filepath.Join(objectsRoot, dstBucket, dstKey)
+	dstPath, ok := resolvePath(c, dstBucket, dstKey)
+	if !ok {
+		return
+	}
 	etag, written, err := finalizeObjectWrite(dstBucket, dstPath, src, meta)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Error copying object")

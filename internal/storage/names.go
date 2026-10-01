@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -145,4 +146,25 @@ func segmentIsSafe(seg string) bool {
 		}
 	}
 	return true
+}
+
+// ErrPathEscape is returned when a bucket, key or upload ID would resolve to a
+// path outside the directory it is joined under.
+var ErrPathEscape = errors.New("path escapes storage root")
+
+// SafeJoin joins names under base one level at a time and refuses any name
+// that is empty, absolute, the directory itself, or climbs out of the path
+// built so far. ValidateNames rejects such input at the HTTP edge, but the
+// filesystem layer must not depend on every caller having passed through it:
+// this keeps the roots sealed against a missed route or a future validator
+// bug, and stops a key from stepping into a sibling bucket.
+func SafeJoin(base string, names ...string) (string, error) {
+	p := base
+	for _, n := range names {
+		if !filepath.IsLocal(n) || filepath.Clean(n) == "." {
+			return "", ErrPathEscape
+		}
+		p = filepath.Join(p, n)
+	}
+	return p, nil
 }

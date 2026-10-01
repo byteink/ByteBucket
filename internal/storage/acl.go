@@ -3,7 +3,6 @@ package storage
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/goccy/go-json"
@@ -44,8 +43,8 @@ func IsPublicRead(acl string) bool {
 // bucketACLPath is the on-disk location of the bucket ACL sidecar. Stored
 // inside the bucket dir alongside .cors.json so DeleteBucket cleans it up
 // atomically without bespoke teardown logic.
-func bucketACLPath(bucket string) string {
-	return filepath.Join(ObjectsRoot, bucket, ".acl.json")
+func bucketACLPath(bucket string) (string, error) {
+	return SafeJoin(ObjectsRoot, bucket, ".acl.json")
 }
 
 // BucketACL is the persisted bucket-level ACL document. Kept as a single
@@ -58,7 +57,11 @@ type BucketACL struct {
 // GetBucketACL reads the ACL for a bucket. Returns ErrNoSuchBucketACL when
 // no sidecar exists; callers must interpret that as "private".
 func GetBucketACL(bucket string) (*BucketACL, error) {
-	data, err := os.ReadFile(bucketACLPath(bucket))
+	path, err := bucketACLPath(bucket)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, ErrNoSuchBucketACL
@@ -86,7 +89,10 @@ func PutBucketACL(bucket string, acl *BucketACL) error {
 	if err != nil {
 		return err
 	}
-	path := bucketACLPath(bucket)
+	path, err := bucketACLPath(bucket)
+	if err != nil {
+		return err
+	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return err

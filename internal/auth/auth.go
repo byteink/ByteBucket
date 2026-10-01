@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -203,7 +202,7 @@ func allowAnonymousRead(c *gin.Context) bool {
 	if key == "" {
 		effective, err = storage.EffectiveBucketACL(bucket)
 	} else {
-		effective, err = storage.EffectiveObjectACL(bucket, filepath.Join(storage.ObjectsRoot, bucket, key))
+		effective, err = objectACL(bucket, key)
 	}
 	if err != nil || !storage.IsPublicRead(effective) {
 		return false
@@ -212,6 +211,17 @@ func allowAnonymousRead(c *gin.Context) bool {
 	c.Set("authMethod", "anonymous")
 	c.Next()
 	return true
+}
+
+// objectACL resolves an object's effective ACL with the key contained in its
+// bucket, so a climbing key cannot inherit a public bucket's ACL for an object
+// stored elsewhere.
+func objectACL(bucket, key string) (string, error) {
+	objectPath, err := storage.SafeJoin(storage.ObjectsRoot, bucket, key)
+	if err != nil {
+		return "", err
+	}
+	return storage.EffectiveObjectACL(bucket, objectPath)
 }
 
 // processHeaderAuth handles signature validation when an Authorization header is provided.

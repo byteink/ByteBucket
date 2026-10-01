@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -300,6 +301,42 @@ func TestE2E_Multipart_AbortThenList(t *testing.T) {
 	if strings.Contains(string(body), "<Upload>") {
 		t.Fatalf("expected empty upload list, got: %s", body)
 	}
+}
+
+// TestE2E_Multipart_TraversalUploadIDContained: uploadId is a query parameter
+// ValidateNames never inspects, so the storage layer alone keeps it inside the
+// upload root. A "../<bucket>/<id>" alias of a real upload must be refused on
+// both surfaces, and the real upload must survive the attempts.
+func TestE2E_Multipart_TraversalUploadIDContained(t *testing.T) {
+	bucket := fmt.Sprintf("mp-trav-%d", time.Now().UnixNano())
+	ensureBucket(t, adminCreds.AccessKeyID, adminCreds.SecretAccessKey, bucket)
+	key := "kept.bin"
+	uploadID := createMultipartViaSigV4(t, bucket, key)
+	alias := "../" + bucket + "/" + uploadID
+
+	sigReq := buildHeaderSigned(t, storageURL, sigV4Request{
+		method: http.MethodDelete,
+		path:   "/" + bucket + "/" + key,
+		query:  map[string][]string{"uploadId": {alias}},
+		accessKey: adminCreds.AccessKeyID, secret: adminCreds.SecretAccessKey,
+	})
+	sigResp, err := http.DefaultClient.Do(sigReq)
+	if err != nil {
+		t.Fatalf("sigv4 abort: %v", err)
+	}
+	_ = readAllClose(t, sigResp)
+	if sigResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("sigv4 traversal abort status=%d want 404", sigResp.StatusCode)
+	}
+
+	adminResp := adminDo(t, adminRequest(t, http.MethodDelete,
+		"/api/s3/"+bucket+"/"+key+"?uploadId="+url.QueryEscape(alias), nil, ""))
+	_ = readAllClose(t, adminResp)
+	if adminResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("admin traversal abort status=%d want 404", adminResp.StatusCode)
+	}
+
+	uploadPartViaSigV4(t, bucket, key, uploadID, 1, []byte("still here"))
 }
 
 // TestE2E_Multipart_AWSSDKCompat is the compatibility gold-standard:

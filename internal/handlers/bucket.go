@@ -28,6 +28,26 @@ func HealthHandler(c *gin.Context) {
 // production always uses /data/objects.
 var objectsRoot = "/data/objects"
 
+const msgPathEscape = "Bucket name or object key resolves outside its bucket"
+
+// resolvePath joins names under objectsRoot through storage.SafeJoin and
+// answers 400 when they would escape it. ValidateNames normally rejects such
+// names first; this keeps every handler contained even when it does not.
+func resolvePath(c *gin.Context, names ...string) (string, bool) {
+	p, err := storage.SafeJoin(objectsRoot, names...)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "InvalidArgument", msgPathEscape)
+		return "", false
+	}
+	return p, true
+}
+
+// resolveObjectPath is resolvePath for an object. The key may still carry the
+// leading "/" of gin's *objectKey wildcard, which is wire shape, not a root.
+func resolveObjectPath(c *gin.Context, bucket, key string) (string, bool) {
+	return resolvePath(c, bucket, strings.TrimPrefix(key, "/"))
+}
+
 // CreateBucketHandler creates a new bucket (directory) and returns an XML
 // response compatible with S3 SDK expectations. Errors flow through
 // respondError so the admin surface sees JSON while SigV4 callers see XML.
@@ -39,7 +59,10 @@ func CreateBucketHandler(c *gin.Context) {
 		return
 	}
 
-	bucketPath := filepath.Join(objectsRoot, bucketName)
+	bucketPath, ok := resolvePath(c, bucketName)
+	if !ok {
+		return
+	}
 
 	if fileInfo, err := os.Stat(bucketPath); err == nil && fileInfo.IsDir() {
 		// BucketAlreadyOwnedByYou keeps the bespoke XML shape with BucketName
@@ -193,7 +216,10 @@ func DeleteBucketHandler(c *gin.Context) {
 		return
 	}
 
-	bucketPath := filepath.Join(objectsRoot, bucketName)
+	bucketPath, ok := resolvePath(c, bucketName)
+	if !ok {
+		return
+	}
 	if bucketPath == objectsRoot {
 		respondError(c, http.StatusBadRequest, "InvalidBucketName", "Cannot delete base directory")
 		return
@@ -302,7 +328,10 @@ func isSidecar(name string) bool {
 // only the response encoder differs.
 func ListObjectsHandler(c *gin.Context) {
 	bucketName := c.Param("bucket")
-	bucketPath := filepath.Join(objectsRoot, bucketName)
+	bucketPath, ok := resolvePath(c, bucketName)
+	if !ok {
+		return
+	}
 	if info, err := os.Stat(bucketPath); err != nil || !info.IsDir() {
 		respondError(c, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
 		return
@@ -642,7 +671,13 @@ func HeadBucketHandler(c *gin.Context) {
 		return
 	}
 
-	bucketPath := filepath.Join(objectsRoot, bucketName)
+	// No body on HEAD, so a contained-path failure is a bare 400 like the
+	// empty-name case above rather than a respondError.
+	bucketPath, err := storage.SafeJoin(objectsRoot, bucketName)
+	if err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
 	fileInfo, err := os.Stat(bucketPath)
 	if os.IsNotExist(err) {
 		c.Status(http.StatusNotFound)

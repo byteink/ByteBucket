@@ -185,7 +185,11 @@ func PutBucketACLHandler(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "InvalidBucketName", "Bucket name required")
 		return
 	}
-	if info, err := os.Stat(filepath.Join(objectsRoot, bucket)); err != nil || !info.IsDir() {
+	bucketPath, ok := resolvePath(c, bucket)
+	if !ok {
+		return
+	}
+	if info, err := os.Stat(bucketPath); err != nil || !info.IsDir() {
 		respondError(c, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
 		return
 	}
@@ -209,7 +213,11 @@ func PutBucketACLHandler(c *gin.Context) {
 // GetBucketACLHandler handles GET /:bucket?acl.
 func GetBucketACLHandler(c *gin.Context) {
 	bucket := c.Param("bucket")
-	if info, err := os.Stat(filepath.Join(objectsRoot, bucket)); err != nil || !info.IsDir() {
+	bucketPath, ok := resolvePath(c, bucket)
+	if !ok {
+		return
+	}
+	if info, err := os.Stat(bucketPath); err != nil || !info.IsDir() {
 		respondError(c, http.StatusNotFound, "NoSuchBucket", "Bucket not found")
 		return
 	}
@@ -229,7 +237,10 @@ func PutObjectACLHandler(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "InvalidRequest", "Bucket and key required")
 		return
 	}
-	objectPath := filepath.Join(objectsRoot, bucket, key)
+	objectPath, ok := resolvePath(c, bucket, key)
+	if !ok {
+		return
+	}
 	if info, err := os.Stat(objectPath); err != nil || info.IsDir() {
 		respondError(c, http.StatusNotFound, "NoSuchKey", "Object not found")
 		return
@@ -252,7 +263,10 @@ func PutObjectACLHandler(c *gin.Context) {
 func GetObjectACLHandler(c *gin.Context) {
 	bucket := c.Param("bucket")
 	key := strings.TrimPrefix(filepath.Clean(c.Param("objectKey")), "/")
-	objectPath := filepath.Join(objectsRoot, bucket, key)
+	objectPath, ok := resolvePath(c, bucket, key)
+	if !ok {
+		return
+	}
 	if info, err := os.Stat(objectPath); err != nil || info.IsDir() {
 		respondError(c, http.StatusNotFound, "NoSuchKey", "Object not found")
 		return

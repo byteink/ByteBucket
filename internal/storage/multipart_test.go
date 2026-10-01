@@ -70,6 +70,18 @@ func TestMultipart_RoundtripCompositeETag(t *testing.T) {
 	expected := []UploadedPart{
 		find(uploaded, 1), find(uploaded, 2), find(uploaded, 3),
 	}
+	listed, err := ListParts(bucket, key, up.UploadID)
+	if err != nil {
+		t.Fatalf("list parts: %v", err)
+	}
+	if len(listed) != len(expected) {
+		t.Fatalf("listed %d parts; want %d", len(listed), len(expected))
+	}
+	for i, p := range listed {
+		if p.PartNumber != expected[i].PartNumber || p.ETag != expected[i].ETag {
+			t.Fatalf("part %d = %+v; want %+v", i, p, expected[i])
+		}
+	}
 	etag, size, err := CompleteMultipartUpload(bucket, key, up.UploadID, expected)
 	if err != nil {
 		t.Fatalf("complete: %v", err)
@@ -95,7 +107,7 @@ func TestMultipart_RoundtripCompositeETag(t *testing.T) {
 	}
 
 	// Staging must be gone.
-	if _, err := os.Stat(uploadDir(bucket, up.UploadID)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(UploadsRoot, bucket, up.UploadID)); !os.IsNotExist(err) {
 		t.Fatalf("upload dir still present: err=%v", err)
 	}
 }
@@ -125,7 +137,7 @@ func TestMultipart_AbortRemovesStaging(t *testing.T) {
 	if err := AbortMultipartUpload(bucket, key, up.UploadID); err != nil {
 		t.Fatalf("abort: %v", err)
 	}
-	if _, err := os.Stat(uploadDir(bucket, up.UploadID)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(UploadsRoot, bucket, up.UploadID)); !os.IsNotExist(err) {
 		t.Fatalf("upload dir still present: err=%v", err)
 	}
 	if _, err := os.Stat(filepath.Join(objDir, bucket, key)); !os.IsNotExist(err) {
