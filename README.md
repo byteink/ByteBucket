@@ -109,7 +109,7 @@ Off by default. Set `RATE_LIMIT_ENABLED=true` to throttle requests per client IP
 | Port | Role | Auth | Expose publicly? |
 | --- | --- | --- | --- |
 | `9000` | S3 wire protocol | AWS SigV4 | Yes, if that's the point. |
-| `9001` | Admin API + web UI + `/metrics` | `X-Admin-AccessKey` + `X-Admin-Secret` headers | **No.** Keep private. |
+| `9001` | Admin API + web UI + `/metrics` | Web UI: session cookie from `POST /api/login`. Scripts: `X-Admin-AccessKey` + `X-Admin-Secret` headers | **No.** Keep private. |
 
 ### Persistence
 
@@ -136,7 +136,16 @@ Port `9001` serves a minimal React dashboard at `/`. It is same-origin with the 
 - Browse, upload, download, delete objects.
 - Edit per-bucket CORS as a JSON document.
 
-Credentials live in the browser's `localStorage` for the session and are sent on every request as `X-Admin-*` headers. There are no session cookies, no CSRF tokens, no login rate limiting — that's why the admin port must not be public. See [SECURITY.md](SECURITY.md) for the hardening backlog.
+Signing in posts the access key and secret once to `POST /api/login`. The server checks them in constant time and answers with a random 256-bit session token in a cookie; the browser never stores the secret.
+
+- **Cookie**: `bb_admin_session`, `HttpOnly`, `SameSite=Strict`, `Path=/api`, no `Max-Age` (it ends with the browser). `Secure` is set whenever the request arrived over TLS, directly or through a proxy that sends `X-Forwarded-Proto: https`; plain-http local runs leave it off so `http://localhost:9001` keeps working.
+- **Server side**: sessions live in memory, keyed by a SHA-256 hash of the token, capped at 1024 (expired sessions are pruned first, then the least recently used is evicted). They expire after **30 minutes idle** or **8 hours** total, and a restart signs everyone out. Deleting or demoting an admin ends their sessions on the next request.
+- **CSRF**: on top of `SameSite=Strict`, every cookie-authenticated request must prove it is same-origin (`Sec-Fetch-Site: same-origin`, or an `Origin` matching the host). Anything else gets `403`.
+- **Brute force**: 10 wrong secrets from one client IP within 15 minutes lock that IP out of admin authentication (form and headers alike) with `429` and `Retry-After` until the window ends. Behind a proxy, configure the trusted-proxy headers so the lockout keys on the real client.
+- **Logout** (`POST /api/logout`) revokes the session on the server and clears the cookie.
+- The UI is served with a strict Content-Security-Policy (no inline script or style, `object-src 'none'`, `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`.
+
+Browsers that ran an older build had the secret in `localStorage` under `bytebucket_session`; the UI deletes that key on every load. The admin port still must not be public. See [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -186,12 +195,20 @@ curl http://localhost:9000/my-bucket/hello.txt \
 
 All admin API endpoints live under `/api/*` so they cannot collide with the React SPA's client-side routes (`/users`, `/buckets`, `/buckets/:name/cors`, ...) served at the root. `/health` and `/metrics` stay at the root as operational endpoints.
 
-Every authenticated request carries:
+Scripts, CLIs and other non-browser clients authenticate every request with:
 
 ```
 X-Admin-AccessKey: <your-admin-access-key>
 X-Admin-Secret:    <your-admin-secret>
 ```
+
+Header auth needs no origin checks (the secret is the proof), but wrong secrets count toward the same per-IP lockout as the login form. The web UI uses a session cookie instead (see [Admin web UI](#admin-web-ui)).
+
+### Session
+
+- `POST /api/login` — body `{"accessKey":"...","secret":"..."}`. `200 {"accessKey":"..."}` plus the session cookie; `401` for wrong credentials or a non-admin user; `429` with `Retry-After` while locked out; `403` for a cross-origin browser request.
+- `GET /api/session` — `200 {"accessKey":"..."}` for a live session (or valid headers), `401` otherwise.
+- `POST /api/logout` — revokes the presented session and clears the cookie. Always `204`, so it is safe to repeat.
 
 ### Health
 
@@ -443,7 +460,9 @@ Everything lives under `/data`:
 
 - **`SignatureDoesNotMatch`** — clock skew between client and server, wrong region (ByteBucket treats all requests as `us-east-1`), or trailing slash / header canonicalisation differences. The error body's `<RequestId>` matches a server log line with the full canonical request trace at `DEBUG`.
 - **`NoSuchCORSConfiguration`** on a preflight — set one via the admin UI or the `?cors` endpoint.
-- **Admin UI says "Invalid credentials"** — you're hitting `/api/users` with `X-Admin-*` headers; the super-user bootstrap only runs when the user DB is empty. Check that `ENCRYPTION_KEY` matches what was used on first boot.
+- **Admin UI says "Invalid admin credentials"** — the super-user bootstrap only runs when the user DB is empty, so env credentials are ignored after first boot. Check that `ENCRYPTION_KEY` matches what was used on first boot.
+- **Admin UI says "Too many failed admin login attempts"** — the client IP hit 10 wrong secrets in 15 minutes. Wait for the `Retry-After` period. If every user shares the lockout, the server sees your proxy's IP: configure the trusted-proxy headers.
+- **Admin UI keeps returning to the login page** — the session expired (30 minutes idle, 8 hours total) or the server restarted. Over plain http on a non-localhost address, also check that nothing sets `X-Forwarded-Proto: https`, which marks the cookie `Secure` so the browser drops it.
 - **Lost admin credentials or `ENCRYPTION_KEY`** — delete `/data/users.db` and restart with fresh env vars. Objects survive; users and ACLs are gone.
 - **Empty `<Owner>` or `dummy-*` in responses** — you're on an older build. Upgrade to `ghcr.io/byteink/bytebucket:latest`.
 - **Connection hangs on large uploads** — use multipart. Per-connection write timeout is 5 minutes.

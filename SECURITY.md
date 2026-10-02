@@ -6,12 +6,30 @@ suitable for a private / localhost deployment only.
 
 ## Current model
 
-- Admin authentication: `X-Admin-AccessKey` and `X-Admin-Secret` headers
-  verified on every request. There are no cookies or server-side sessions.
-- Credentials are stored in the browser's `localStorage` after login and
-  sent as `X-Admin-*` headers on every admin API call. The admin UI talks
-  to storage operations via the same-origin `/api/s3/*` surface on port 9001;
-  there is no AWS SDK in the browser and no cross-origin call from the UI.
+- Admin web UI: the access key and secret are posted once to
+  `POST /api/login`, compared in constant time, and exchanged for a random
+  256-bit session token in a cookie (`HttpOnly`, `SameSite=Strict`,
+  `Path=/api`, no expiry attribute, `Secure` whenever the request arrived over
+  TLS directly or via `X-Forwarded-Proto: https`). The browser never stores the
+  secret; older builds' `localStorage` copy is deleted on load.
+- Sessions are held in memory as SHA-256 hashes of the token, capped at 1024,
+  and expire after 30 minutes idle or 8 hours total. `POST /api/logout`
+  revokes server-side. Deleting or demoting an admin ends their sessions.
+- Every cookie-authenticated request must also prove it is same-origin
+  (`Sec-Fetch-Site: same-origin`, or an `Origin` matching the host); otherwise
+  `403`. This sits on top of `SameSite=Strict`.
+- Scripts and CLIs authenticate with `X-Admin-AccessKey` and
+  `X-Admin-Secret` headers on every request. The README documents this as the
+  admin API for any language, so it stays.
+- Brute force: 10 wrong secrets from one client IP within 15 minutes lock that
+  IP out of admin authentication (login and headers) until the window ends.
+- The admin UI is served with a strict Content-Security-Policy (no inline
+  script or style, `object-src 'none'`, `frame-ancestors 'none'`), plus
+  `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and
+  `Referrer-Policy: no-referrer`.
+- The admin UI talks to storage operations via the same-origin `/api/s3/*`
+  surface on port 9001; there is no AWS SDK in the browser and no
+  cross-origin call from the UI.
 - S3 authentication: AWS Signature V4 on port 9000.
 - CORS is configured per bucket as an S3 subresource (`PUT/GET/DELETE
   /:bucket?cors`). There is no global, user-editable origin allowlist;
@@ -42,10 +60,6 @@ required beyond keeping 9001 bound to localhost or a private subnet.
 
 The following items are known gaps and are tracked for future work:
 
-- Server-side sessions with short-lived tokens (replace header-auth on
-  admin)
-- CSRF protection for the admin API
-- Rate limiting / brute-force protection on admin auth
 - TOTP / WebAuthn second factor for the super-user
 - In-process TLS termination for the admin port
 - Audit log for administrative actions

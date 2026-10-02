@@ -265,3 +265,16 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   PUBLIC_BASE_URL for img/media/frame), HEAD backfills Last-Modified from mtime,
   theme boot moved to /theme.js (inline script was CSP-blocked). Browser E2E
   grew to 17 specs. REMAINING: Phase 3 versioning.
+- 2026-10-02: admin secret out of the browser DONE (closes CodeQL clear-text
+  storage alert on web/src/lib/session.ts). POST /api/login exchanges the
+  admin key+secret once for a 256-bit token in an HttpOnly, SameSite=Strict,
+  Path=/api cookie (Secure over TLS or X-Forwarded-Proto: https). In-memory
+  store keyed by SHA-256(token), cap 1024 (prune expired, then LRU), 30m idle
+  / 8h absolute. GET /api/session, POST /api/logout (server-side revoke).
+  Cookie auth requires same-origin evidence (Sec-Fetch-Site or Origin), else
+  403. X-Admin-* header auth kept for scripts. Per-IP lockout (10 failures /
+  15m, cap 4096) shared by login and header auth. Unknown key and wrong secret
+  are indistinguishable (same body, dummy decrypt, digest compare). CSP
+  tightened (style-src 'self', object-src 'none', form-action 'self'). UI
+  purges the legacy bytebucket_session key on load. vitest added for web lib
+  tests.

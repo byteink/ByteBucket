@@ -33,7 +33,10 @@ Environment overrides (all optional; defaults target the local-compose superuser
 - Specs that mutate persisted settings (fsync, retention) toggle relative to the
   current value and restore it; `make e2e-web` also starts each run from a clean
   volume.
-- Coverage: login/auth guard/logout, overview tiles + request chart navigation,
+- Coverage: login/auth guard/logout, the session cookie's flags, the secret
+  never landing in localStorage/sessionStorage, purge of the legacy stored
+  secret, server-side revocation returning the UI to login, zero CSP
+  violations across the main pages, overview tiles + request chart navigation,
   per-bucket table, bucket create/publish/delete dialogs, object list selection
   delete + detail page preview, user create/grant/delete through the access
   drawer, log filters and details, durability/retention/access-log settings.
