@@ -34,6 +34,21 @@ jobs:
       - name: Unit + E2E
         run: make test
 
+  # Web unit tests (vitest) for the admin UI's session and API client code.
+  # Type checking already runs in the Docker image build via `npm run build`.
+  web-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install web deps
+        run: cd web && npm ci --no-audit --no-fund
+      - name: Unit tests
+        run: cd web && npm test
+
   # Black-box DAST: the same probe suite the release preflight gates on.
   pentest:
     runs-on: ubuntu-latest
