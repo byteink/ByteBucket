@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { createBucket, deleteBucket, listBuckets, putBucketACL, type CannedACL } from '../lib/s3';
 import { getStats } from '../lib/admin';
-import { loadSession, type Session } from '../lib/session';
 import { formatBytes, formatCount, formatDate, errorMessage } from '../lib/format';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Icon } from '../components/icons';
@@ -40,8 +39,8 @@ const VISIBILITY_OPTIONS = [
 
 // loadRows joins the S3 listing with per-bucket stats by name. Stats are a
 // nice-to-have, so their failure degrades the columns rather than the page.
-async function loadRows(session: Session): Promise<Row[]> {
-  const [list, stats] = await Promise.all([listBuckets(session), getStats(session).catch(() => null)]);
+async function loadRows(): Promise<Row[]> {
+  const [list, stats] = await Promise.all([listBuckets(), getStats().catch(() => null)]);
   const byName = new Map(stats?.perBucket.map((b) => [b.name, b]) ?? []);
   return list.map((b) => {
     const s = byName.get(b.name);
@@ -202,7 +201,6 @@ function deleteBody(row: Row): string {
 }
 
 export default function BucketsPage() {
-  const [session] = useState(loadSession);
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
@@ -211,14 +209,13 @@ export default function BucketsPage() {
   const [dialogError, setDialogError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!session) return;
     setError(null);
     try {
-      setRows(await loadRows(session));
+      setRows(await loadRows());
     } catch (e) {
       setError(errorMessage(e));
     }
-  }, [session]);
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -251,23 +248,21 @@ export default function BucketsPage() {
   }
 
   async function onCreate(name: string, acl: CannedACL) {
-    if (!session) return;
     await run(async () => {
-      await createBucket(session, name);
-      if (acl === 'public-read') await putBucketACL(session, name, acl);
+      await createBucket(name);
+      if (acl === 'public-read') await putBucketACL(name, acl);
     });
   }
 
   // Widening to public-read goes through a confirm; narrowing back to private
   // is always safe and applies immediately.
   async function onToggleACL(row: Row) {
-    if (!session) return;
     if (row.acl !== 'public-read') {
       openDialog({ kind: 'public', row });
       return;
     }
     try {
-      await putBucketACL(session, row.name, 'private');
+      await putBucketACL(row.name, 'private');
       await refresh();
     } catch (e) {
       setError(errorMessage(e));
@@ -319,7 +314,7 @@ export default function BucketsPage() {
         confirmLabel="Make public"
         busy={busy}
         error={dialogError}
-        onConfirm={() => target && session && run(() => putBucketACL(session, target.name, 'public-read'))}
+        onConfirm={() => target && run(() => putBucketACL(target.name, 'public-read'))}
         onClose={closeDialog}
       />
       <ConfirmDialog
@@ -334,7 +329,7 @@ export default function BucketsPage() {
         match={target?.name}
         busy={busy}
         error={dialogError}
-        onConfirm={() => target && session && run(() => deleteBucket(session, target.name))}
+        onConfirm={() => target && run(() => deleteBucket(target.name))}
         onClose={closeDialog}
       />
     </section>

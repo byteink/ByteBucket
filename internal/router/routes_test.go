@@ -99,3 +99,30 @@ func TestAdminRouterMountsStorageUnderAPIS3(t *testing.T) {
 		}
 	}
 }
+
+// Login and logout must sit outside the admin auth middleware (they are how a
+// browser obtains and drops a session), while the session probe sits behind
+// it so it reports 401 once the cookie is gone.
+func TestAdminRouterMountsSessionRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := NewAdminRouter(middleware.NewRateLimitController(middleware.RateLimitConfig{}))
+
+	cases := []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodPost, "/api/login", http.StatusBadRequest},
+		{http.MethodPost, "/api/logout", http.StatusNoContent},
+		{http.MethodGet, "/api/session", http.StatusUnauthorized},
+	}
+	for _, tc := range cases {
+		if !routeExists(r, tc.method, tc.path) {
+			t.Fatalf("admin router missing %s %s", tc.method, tc.path)
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
+		if w.Code != tc.want {
+			t.Errorf("%s %s: got %d, want %d", tc.method, tc.path, w.Code, tc.want)
+		}
+	}
+}

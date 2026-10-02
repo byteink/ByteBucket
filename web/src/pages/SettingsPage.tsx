@@ -18,7 +18,6 @@ import {
   type TrustedProxyConfig,
   type WhoAmI,
 } from '../lib/admin';
-import { loadSession, type Session } from '../lib/session';
 import { errorMessage } from '../lib/format';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Loading, PageHeader, Saved, Tip } from '../components/ui';
@@ -35,14 +34,14 @@ function hasHeader(headers: string[], h: string): boolean {
 // useSetting loads one setting once and owns the busy/error state of any
 // write against it, so every section shares the same lifecycle without
 // restating it.
-function useSetting<T>(session: Session, load: (s: Session) => Promise<T>) {
+function useSetting<T>(load: () => Promise<T>) {
   const [value, setValue] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let live = true;
-    load(session)
+    load()
       .then((v) => {
         if (live) setValue(v);
       })
@@ -52,9 +51,7 @@ function useSetting<T>(session: Session, load: (s: Session) => Promise<T>) {
     return () => {
       live = false;
     };
-    // session is read once from localStorage; depending on its identity would loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [load]);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -158,8 +155,8 @@ function SaveRow({
   );
 }
 
-function RateLimitSection({ session }: Readonly<{ session: Session }>) {
-  const { value: state, setValue: setState, error, busy, run } = useSetting(session, getRateLimit);
+function RateLimitSection() {
+  const { value: state, setValue: setState, error, busy, run } = useSetting(getRateLimit);
   const [form, setForm] = useState<RateLimitConfig | null>(null);
   const draft = form ?? state?.effective ?? null;
 
@@ -175,7 +172,7 @@ function RateLimitSection({ session }: Readonly<{ session: Session }>) {
   function onSave() {
     if (!state || !draft) return;
     run(async () => {
-      const effective = await putRateLimit(session, draft);
+      const effective = await putRateLimit(draft);
       apply({ env: state.env, override: draft, effective });
     });
   }
@@ -183,7 +180,7 @@ function RateLimitSection({ session }: Readonly<{ session: Session }>) {
   function onReset() {
     if (!state) return;
     run(async () => {
-      const effective = await deleteRateLimit(session);
+      const effective = await deleteRateLimit();
       apply({ env: state.env, override: null, effective });
     });
   }
@@ -275,8 +272,8 @@ function LiveCheck({ who, onRefresh }: Readonly<{ who: WhoAmI | null; onRefresh:
   );
 }
 
-function TrustedProxySection({ session }: Readonly<{ session: Session }>) {
-  const { value: cfg, setValue: setCfg, error, busy, run } = useSetting(session, getTrustedProxy);
+function TrustedProxySection() {
+  const { value: cfg, setValue: setCfg, error, busy, run } = useSetting(getTrustedProxy);
   const [form, setForm] = useState<TrustedProxyConfig | null>(null);
   const [who, setWho] = useState<WhoAmI | null>(null);
   const [whoError, setWhoError] = useState<string | null>(null);
@@ -285,7 +282,7 @@ function TrustedProxySection({ session }: Readonly<{ session: Session }>) {
   const draft = form ?? cfg;
 
   function loadWho() {
-    getWhoAmI(session)
+    getWhoAmI()
       .then((w) => {
         setWho(w);
         setWhoError(null);
@@ -295,8 +292,6 @@ function TrustedProxySection({ session }: Readonly<{ session: Session }>) {
 
   useEffect(() => {
     loadWho();
-    // session is read once from localStorage; depending on its identity would loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function edit(p: Partial<TrustedProxyConfig>) {
@@ -321,7 +316,7 @@ function TrustedProxySection({ session }: Readonly<{ session: Session }>) {
   function onSave() {
     if (!draft) return;
     run(async () => {
-      setCfg(await putTrustedProxy(session, draft));
+      setCfg(await putTrustedProxy(draft));
       setForm(null);
       setSaved(true);
       loadWho();
@@ -388,8 +383,8 @@ function TrustedProxySection({ session }: Readonly<{ session: Session }>) {
   );
 }
 
-function DurabilitySection({ session }: Readonly<{ session: Session }>) {
-  const { value: on, setValue: setOn, error, busy, run } = useSetting(session, getSyncWrites);
+function DurabilitySection() {
+  const { value: on, setValue: setOn, error, busy, run } = useSetting(getSyncWrites);
   const [draft, setDraft] = useState<boolean | null>(null);
   const [savedText, setSavedText] = useState<string | null>(null);
   const checked = draft ?? on;
@@ -397,7 +392,7 @@ function DurabilitySection({ session }: Readonly<{ session: Session }>) {
   function onSave() {
     if (checked === null) return;
     run(async () => {
-      const now = await putSyncWrites(session, checked);
+      const now = await putSyncWrites(checked);
       setOn(now);
       setDraft(null);
       setSavedText(now ? 'Durable writes enabled (fsync on).' : 'Durable writes disabled (faster, less safe).');
@@ -432,8 +427,8 @@ function DurabilitySection({ session }: Readonly<{ session: Session }>) {
   );
 }
 
-function AccessLogSection({ session }: Readonly<{ session: Session }>) {
-  const { value: cfg, setValue: setCfg, error, busy, run } = useSetting(session, getAccessLog);
+function AccessLogSection() {
+  const { value: cfg, setValue: setCfg, error, busy, run } = useSetting(getAccessLog);
   const [form, setForm] = useState<AccessLogConfig | null>(null);
   const [saved, setSaved] = useState(false);
   const draft = form ?? cfg;
@@ -447,7 +442,7 @@ function AccessLogSection({ session }: Readonly<{ session: Session }>) {
   function onSave() {
     if (!draft) return;
     run(async () => {
-      setCfg(await putAccessLog(session, draft));
+      setCfg(await putAccessLog(draft));
       setForm(null);
       setSaved(true);
     });
@@ -494,8 +489,8 @@ function AccessLogSection({ session }: Readonly<{ session: Session }>) {
   );
 }
 
-function RetentionSection({ session }: Readonly<{ session: Session }>) {
-  const { value: days, setValue: setDays, error, busy, run } = useSetting(session, getRetention);
+function RetentionSection() {
+  const { value: days, setValue: setDays, error, busy, run } = useSetting(getRetention);
   const [draft, setDraft] = useState<number | null>(null);
   const [savedText, setSavedText] = useState<string | null>(null);
   const value = draft ?? days;
@@ -503,7 +498,7 @@ function RetentionSection({ session }: Readonly<{ session: Session }>) {
   function onSave() {
     if (value === null) return;
     run(async () => {
-      const saved = await putRetention(session, value);
+      const saved = await putRetention(value);
       setDays(saved);
       setDraft(null);
       setSavedText(`Request history retained for ${saved} days.`);
@@ -546,19 +541,17 @@ function RetentionSection({ session }: Readonly<{ session: Session }>) {
 }
 
 export default function SettingsPage() {
-  const session = loadSession();
-  if (!session) return null;
   return (
     <div>
       <PageHeader
         title="Settings"
         sub="Runtime configuration. Saved values apply immediately on both ports and persist across restarts."
       />
-      <RateLimitSection session={session} />
-      <TrustedProxySection session={session} />
-      <DurabilitySection session={session} />
-      <AccessLogSection session={session} />
-      <RetentionSection session={session} />
+      <RateLimitSection />
+      <TrustedProxySection />
+      <DurabilitySection />
+      <AccessLogSection />
+      <RetentionSection />
     </div>
   );
 }

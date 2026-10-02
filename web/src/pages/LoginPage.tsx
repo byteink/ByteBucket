@@ -1,12 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { saveSession } from '../lib/session';
-import { checkAdminAuth } from '../lib/admin';
+import { login } from '../lib/session';
 import ThemeToggle from '../components/ThemeToggle';
 import { ErrorBanner } from '../components/ErrorBanner';
 
-// LoginPage collects admin credentials. The UI and the storage API are
-// same-origin on the admin port, so there is no separate endpoint to ask for.
+// LoginPage posts the admin credentials once to /api/login. The server answers
+// with an HttpOnly session cookie, so the secret leaves the form state and is
+// never persisted by the browser.
 export default function LoginPage() {
   const navigate = useNavigate();
   const [accessKey, setAccessKey] = useState('');
@@ -20,14 +20,11 @@ export default function LoginPage() {
     setError(null);
     setBusy(true);
     try {
-      const session = { accessKey, secret };
-      const adminErr = await checkAdminAuth(session);
-      if (adminErr) {
-        setError(adminErr);
-        return;
-      }
-      saveSession(session);
+      await login(accessKey, secret);
+      setSecret('');
       navigate('/dashboard', { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }

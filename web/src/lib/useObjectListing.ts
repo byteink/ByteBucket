@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { getBucketACL, listObjects, type CannedACL, type S3Object } from './s3';
-import type { Session } from './session';
 
 export interface ObjectRow {
   key: string;
@@ -38,7 +37,6 @@ function toRow(o: S3Object): ObjectRow {
 // id so navigating away mid-fetch can never splice one folder's results into
 // another's view.
 export function useObjectListing(
-  session: Session | null,
   bucket: string,
   prefix: string,
 ): ObjectListing {
@@ -51,7 +49,7 @@ export function useObjectListing(
   const listSeq = useRef(0);
 
   async function refresh() {
-    if (!session || !bucket) return;
+    if (!bucket) return;
     const seq = ++listSeq.current;
     setError(null);
     setRows(null);
@@ -59,8 +57,8 @@ export function useObjectListing(
     setNextToken(undefined);
     try {
       const [list, bAcl] = await Promise.all([
-        listObjects(session, bucket, prefix, '/'),
-        getBucketACL(session, bucket),
+        listObjects(bucket, prefix, '/'),
+        getBucketACL(bucket),
       ]);
       if (seq !== listSeq.current) return;
       setBucketACL(bAcl);
@@ -74,12 +72,12 @@ export function useObjectListing(
   }
 
   async function loadMore() {
-    if (!session || !bucket || !nextToken || loadingMore) return;
+    if (!bucket || !nextToken || loadingMore) return;
     const seq = listSeq.current;
     setLoadingMore(true);
     setError(null);
     try {
-      const list = await listObjects(session, bucket, prefix, '/', nextToken);
+      const list = await listObjects(bucket, prefix, '/', nextToken);
       if (seq !== listSeq.current) return;
       setFolders((prev) => {
         const seen = new Set(prev);

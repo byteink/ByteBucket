@@ -7,7 +7,6 @@ import {
   NoSuchCORSConfiguration,
   putBucketCORS,
 } from '../lib/s3';
-import { loadSession } from '../lib/session';
 import { errorMessage } from '../lib/format';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { ConfirmDialog, Loading, PageHeader, Saved } from '../components/ui';
@@ -37,7 +36,6 @@ function parseConfig(text: string): BucketCORSConfig {
 export default function BucketCORSPage() {
   const { name } = useParams<{ name: string }>();
   const bucket = name ?? '';
-  const [session] = useState(loadSession);
   const [text, setText] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [exists, setExists] = useState(false);
@@ -48,10 +46,10 @@ export default function BucketCORSPage() {
   const [dialogError, setDialogError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!session || !bucket) return;
+    if (!bucket) return;
     (async () => {
       try {
-        setText(JSON.stringify(await getBucketCORS(session, bucket), null, 2));
+        setText(JSON.stringify(await getBucketCORS(bucket), null, 2));
         setExists(true);
       } catch (e) {
         if (!(e instanceof NoSuchCORSConfiguration)) setError(errorMessage(e));
@@ -61,14 +59,13 @@ export default function BucketCORSPage() {
         setLoaded(true);
       }
     })();
-  }, [session, bucket]);
+  }, [bucket]);
 
   async function onSave() {
-    if (!session) return;
     setError(null);
     setStatus(null);
     try {
-      await putBucketCORS(session, bucket, parseConfig(text));
+      await putBucketCORS(bucket, parseConfig(text));
       setExists(true);
       setStatus('saved');
     } catch (e) {
@@ -77,11 +74,10 @@ export default function BucketCORSPage() {
   }
 
   async function onDelete() {
-    if (!session) return;
     setBusy(true);
     setDialogError(null);
     try {
-      await deleteBucketCORS(session, bucket);
+      await deleteBucketCORS(bucket);
       setText(defaultText);
       setExists(false);
       setStatus('deleted');

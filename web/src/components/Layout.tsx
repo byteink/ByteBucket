@@ -1,5 +1,8 @@
+import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { clearSession, loadSession } from '../lib/session';
+import { logout } from '../lib/session';
+import { useSession } from '../lib/sessionContext';
+import { ErrorBanner } from './ErrorBanner';
 import ThemeToggle from './ThemeToggle';
 import { IconButton } from './ui';
 
@@ -15,11 +18,19 @@ const navItems = [
 // session, and a fluid main column so tables and logs get the full width.
 export default function Layout() {
   const navigate = useNavigate();
-  const session = loadSession();
+  const session = useSession();
+  const [error, setError] = useState<string | null>(null);
 
-  function onLogout() {
-    clearSession();
-    navigate('/login', { replace: true });
+  // Navigate only once the server has revoked the session; leaving a live
+  // cookie behind while showing the login page would mislead the operator.
+  async function onLogout() {
+    setError(null);
+    try {
+      await logout();
+      navigate('/login', { replace: true });
+    } catch (e) {
+      setError(`Log out failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   return (
@@ -36,10 +47,11 @@ export default function Layout() {
         <div className="foot">
           <div
             className="flex items-center h-8 px-3 font-mono text-xs text-ink-500 truncate tt tt-right"
-            data-tip={`Signed in as ${session?.accessKey ?? ''}`}
+            data-tip={`Signed in as ${session.accessKey}`}
           >
-            {session?.accessKey}
+            {session.accessKey}
           </div>
+          {error && <ErrorBanner message={error} className="mx-3" />}
           <div className="flex gap-0.5">
             <ThemeToggle />
             <IconButton icon="logout" label="Log out" onClick={onLogout} />

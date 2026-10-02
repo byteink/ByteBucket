@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getLogs, type LogCategory, type LogEvent } from '../lib/admin';
-import { loadSession } from '../lib/session';
 import { errorMessage, formatBytes, formatDateTime } from '../lib/format';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Dialog, EmptyState, IconButton, Loading, PageHeader, SearchInput, Seg } from '../components/ui';
@@ -342,7 +341,6 @@ function Empty({ category }: Readonly<{ category: LogCategory }>) {
 }
 
 export default function LogsPage() {
-  const session = loadSession();
   const [category, setCategory] = useState<LogCategory>('data');
   const [events, setEvents] = useState<LogEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -352,13 +350,12 @@ export default function LogsPage() {
   const [details, setDetails] = useState<LogEvent | null>(null);
 
   useEffect(() => {
-    if (!session) return;
     let live = true;
     setEvents(null);
     setExhausted(false);
     setError(null);
     setFilters(NO_FILTERS);
-    getLogs(session, category, PAGE)
+    getLogs(category, PAGE)
       .then((e) => {
         if (!live) return;
         setEvents(e);
@@ -368,16 +365,14 @@ export default function LogsPage() {
     return () => {
       live = false;
     };
-    // session is read once from localStorage; depending on its identity would loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category]);
 
   async function loadMore() {
-    if (!session || !events || events.length === 0) return;
+    if (!events || events.length === 0) return;
     setBusy(true);
     setError(null);
     try {
-      const older = await getLogs(session, category, PAGE, events[events.length - 1].ts);
+      const older = await getLogs(category, PAGE, events[events.length - 1].ts);
       setEvents([...events, ...older]);
       if (older.length < PAGE) setExhausted(true);
     } catch (e) {

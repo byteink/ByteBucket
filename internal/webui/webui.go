@@ -54,14 +54,18 @@ func SetMediaOrigin(raw string) {
 // csp builds the Content-Security-Policy for SPA responses: same-origin for
 // everything, blob: for previews built from downloaded bodies, and the public
 // storage origin (when configured) so presigned previews stream directly.
+// Neither scripts nor styles may be inline: the bundle ships external files
+// only, and React applies style props through the CSSOM, which CSP does not
+// gate. object-src and form-action close the plugin and form-hijack vectors
+// that default-src alone leaves open.
 func csp() string {
 	extra := ""
 	if o, _ := mediaOrigin.Load().(string); o != "" {
 		extra = " " + o
 	}
 	return "default-src 'self'; img-src 'self' data: blob:" + extra + "; media-src 'self' blob:" + extra +
-		"; frame-src 'self' blob:" + extra + "; style-src 'self' 'unsafe-inline'; " +
-		"script-src 'self'; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'"
+		"; frame-src 'self' blob:" + extra + "; style-src 'self'; script-src 'self'; connect-src 'self'; " +
+		"font-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 }
 
 // Handler returns an http.Handler that serves the embedded SPA.

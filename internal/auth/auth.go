@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
@@ -19,16 +18,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
-
-// constantTimeStringEqual reports whether two strings are equal in
-// constant time relative to their length. Unequal lengths short-circuit but
-// do not leak content of either input.
-func constantTimeStringEqual(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
-}
 
 // S3ErrorResponse represents a typical S3 error response.
 type S3ErrorResponse struct {
@@ -50,79 +39,36 @@ func abortWithError(c *gin.Context, status int, code, message string) {
 	})
 }
 
-// AdminAuthMiddleware authenticates admin requests by extracting credentials from headers,
-// finding the corresponding user in storage, decrypting the stored secret, and verifying
-// that the user has admin privileges (i.e. an ACL rule with Effect "Allow" and both Buckets
-// and Actions set to "*").
+// AdminAuthMiddleware authenticates admin API requests by one of two means and
+// requires the caller to be an admin (an Allow rule with "*" buckets and "*"
+// actions):
+//
+//   - X-Admin-AccessKey / X-Admin-Secret headers, for scripts and CLIs. The
+//     secret is itself the proof of intent, so no origin check applies, but
+//     wrong secrets count toward the per-IP lockout shared with login.
+//   - The HttpOnly session cookie issued by LoginHandler, for the web UI. It
+//     is ambient, so cookieAuth also demands same-origin evidence.
+//
+// Headers win when present so a script that happens to hold a cookie jar
+// keeps its explicit identity.
 func AdminAuthMiddleware(c *gin.Context) {
-	// Extract credentials from headers.
 	accessKey := c.GetHeader("X-Admin-AccessKey")
-	providedSecret := c.GetHeader("X-Admin-Secret")
-	if accessKey == "" || providedSecret == "" {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Missing admin credentials"})
-		return
-	}
-
-	// Retrieve the user from storage using the accessKey.
-	user, err := storage.GetUser(accessKey)
-	if err != nil {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
-		return
-	}
-
-	// Decrypt the stored secret.
-	storedSecret, err := storage.Decrypt(user.EncryptedSecret)
-	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Error decrypting secret"})
-		return
-	}
-
-	// Verify that the provided secret matches the stored (decrypted) secret.
-	// Use a length-tolerant constant-time comparison to avoid leaking the
-	// stored secret's length or content via response timing.
-	if !constantTimeStringEqual(providedSecret, storedSecret) {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid admin secret"})
-		return
-	}
-
-	// Check admin privileges.
-	// Here we define a user as admin if they have an ACL rule with Effect "Allow" and both
-	// Buckets and Actions set to "*".
-	isAdmin := false
-	for _, rule := range user.ACL {
-		if strings.EqualFold(rule.Effect, "Allow") {
-			hasAllBuckets := false
-			hasAllActions := false
-			for _, bucket := range rule.Buckets {
-				if bucket == "*" {
-					hasAllBuckets = true
-					break
-				}
-			}
-			for _, action := range rule.Actions {
-				if action == "*" {
-					hasAllActions = true
-					break
-				}
-			}
-			if hasAllBuckets && hasAllActions {
-				isAdmin = true
-				break
-			}
+	secret := c.GetHeader("X-Admin-Secret")
+	if accessKey != "" || secret != "" {
+		if accessKey == "" || secret == "" {
+			abortJSON(c, http.StatusUnauthorized, "Missing admin credentials")
+			return
 		}
-	}
-
-	if !isAdmin {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "User does not have admin privileges"})
+		if user, ok := checkCredentials(c, accessKey, secret); ok {
+			publishAdmin(c, user, authMethodHdr)
+		}
 		return
 	}
-
-	// Publish the authenticated admin user so storage handlers mounted on
-	// the admin surface can share the same code path as the SigV4 surface.
-	c.Set("user", user)
-	c.Set("authMethod", "admin")
-	// All checks passed, continue to the next handler.
-	c.Next()
+	if token, err := c.Cookie(SessionCookieName); err == nil && token != "" {
+		cookieAuth(c, token)
+		return
+	}
+	abortJSON(c, http.StatusUnauthorized, "Missing admin credentials")
 }
 
 // AuthMiddleware validates incoming requests using AWS Signature Version 4.

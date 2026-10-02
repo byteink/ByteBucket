@@ -5,7 +5,6 @@ import {
   type RequestRange,
   type RequestSeries,
 } from '../lib/admin';
-import { loadSession } from '../lib/session';
 import { errorMessage, formatCount, formatDateTime } from '../lib/format';
 import { ErrorBanner } from './ErrorBanner';
 import { IconButton, Loading, Seg } from './ui';
@@ -50,16 +49,14 @@ function total(b: RequestBucket): number {
 }
 
 export function RequestChart({ refreshKey = 0 }: Readonly<{ refreshKey?: number }>) {
-  const session = loadSession();
   const [range, setRange] = useState<RequestRange>('24h');
   const [offset, setOffset] = useState(0);
   const [data, setData] = useState<RequestSeries | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!session) return;
     let live = true;
-    getRequestSeries(session, range, offset)
+    getRequestSeries(range, offset)
       .then((d) => {
         if (!live) return;
         setData(d);
@@ -69,8 +66,6 @@ export function RequestChart({ refreshKey = 0 }: Readonly<{ refreshKey?: number 
     return () => {
       live = false;
     };
-    // session is read once from localStorage; depending on its identity would loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range, offset, refreshKey]);
 
   function pickRange(r: RequestRange) {

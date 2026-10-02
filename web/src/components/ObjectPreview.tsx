@@ -5,7 +5,6 @@
 // blob slice so a 50 MB log file cannot lock the tab.
 import { useEffect, useState, type ReactNode } from 'react';
 import { getObject, presignObject } from '../lib/s3';
-import type { Session } from '../lib/session';
 import { errorMessage } from '../lib/format';
 import { IconButton, Loading, Seg } from './ui';
 
@@ -52,28 +51,26 @@ const ZOOMS = [
   { key: 'full', label: '100%' },
 ] as const;
 
-async function tryPresign(session: Session, bucket: string, key: string): Promise<string | null> {
+async function tryPresign(bucket: string, key: string): Promise<string | null> {
   try {
-    return (await presignObject(session, bucket, key, PRESIGN_TTL)).url;
+    return (await presignObject(bucket, key, PRESIGN_TTL)).url;
   } catch {
     return null;
   }
 }
 
-async function loadText(session: Session, bucket: string, key: string): Promise<TextSource> {
-  const blob = await getObject(session, bucket, key);
+async function loadText(bucket: string, key: string): Promise<TextSource> {
+  const blob = await getObject(bucket, key);
   return { text: await blob.slice(0, TEXT_LIMIT).text(), truncated: blob.size > TEXT_LIMIT };
 }
 
 export function ObjectPreview({
-  session,
   bucket,
   objectKey,
   contentType,
   onDimensions,
   onError,
 }: Readonly<{
-  session: Session;
   bucket: string;
   objectKey: string;
   contentType: string;
@@ -95,17 +92,17 @@ export function ObjectPreview({
     setText(null);
     const load = async () => {
       if (kind === 'text') {
-        const t = await loadText(session, bucket, objectKey);
+        const t = await loadText(bucket, objectKey);
         if (!cancelled) setText(t);
         return;
       }
-      const presigned = forceBlob ? null : await tryPresign(session, bucket, objectKey);
+      const presigned = forceBlob ? null : await tryPresign(bucket, objectKey);
       if (cancelled) return;
       if (presigned) {
         setMedia({ url: presigned, streamed: true });
         return;
       }
-      const blob = await getObject(session, bucket, objectKey);
+      const blob = await getObject(bucket, objectKey);
       if (cancelled) return;
       revoke = URL.createObjectURL(blob);
       setMedia({ url: revoke, streamed: false });
@@ -119,7 +116,7 @@ export function ObjectPreview({
     };
     // onError is a plain callback; re-running the fetch when it changes identity would refetch on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, bucket, objectKey, kind, forceBlob]);
+  }, [bucket, objectKey, kind, forceBlob]);
 
   function onMediaError() {
     if (media?.streamed) setForceBlob(true);

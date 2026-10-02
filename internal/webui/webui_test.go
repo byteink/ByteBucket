@@ -107,3 +107,41 @@ func TestHandler_CSPIgnoresMalformedOrigin(t *testing.T) {
 		}
 	}
 }
+
+// The admin CSP must be strict: no inline script or style, no plugins, no
+// framing, and forms and <base> pinned to our own origin.
+func TestHandler_CSPIsStrict(t *testing.T) {
+	csp := cspFor(t, "")
+	for _, want := range []string{
+		"default-src 'self';", "script-src 'self';", "style-src 'self';", "object-src 'none';",
+		"frame-ancestors 'none';", "base-uri 'self';", "form-action 'self'",
+	} {
+		if !strings.Contains(csp, want) {
+			t.Fatalf("CSP %q missing %q", csp, want)
+		}
+	}
+	if strings.Contains(csp, "unsafe-") {
+		t.Fatalf("CSP %q allows an unsafe-* source", csp)
+	}
+}
+
+// The served index must not carry inline <script> blocks, since script-src
+// 'self' would block them and break the UI.
+func TestHandler_IndexHasNoInlineScripts(t *testing.T) {
+	body, err := io.ReadAll(doGet(t, Handler(), "/").Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	html := strings.ToLower(string(body))
+	for i := strings.Index(html, "<script"); i >= 0; {
+		end := strings.Index(html[i:], ">")
+		if end < 0 || !strings.Contains(html[i:i+end], " src=") {
+			t.Fatalf("inline script in index: %q", html[i:])
+		}
+		next := strings.Index(html[i+1:], "<script")
+		if next < 0 {
+			break
+		}
+		i += next + 1
+	}
+}

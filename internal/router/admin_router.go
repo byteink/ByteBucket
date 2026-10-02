@@ -34,9 +34,11 @@ const trustedProxyConfigPath = "/config/trustedproxy"
 // The embedded admin SPA is served at / (and any unknown path) without auth;
 // every authenticated admin API endpoint lives under /api/* so SPA routes
 // like /users or /buckets cannot collide with server-side handlers. The UI is
-// public by design: credentials are collected client-side at login and sent
-// on every API call as X-Admin-* headers. The entire admin port is expected
-// to be bound to localhost or a private network — see SECURITY.md.
+// public by design: it posts the admin credentials once to /api/login and
+// then rides an HttpOnly, SameSite=Strict session cookie scoped to /api, so
+// the secret never persists in the browser. Scripts and CLIs keep using the
+// X-Admin-* headers. The entire admin port is expected to be bound to
+// localhost or a private network — see SECURITY.md.
 func NewAdminRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -72,6 +74,12 @@ func NewAdminRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 	// internet.
 	r.GET("/metrics", gin.WrapH(middleware.PrometheusHandler()))
 
+	// Session lifecycle. Outside the admin middleware because they are how a
+	// browser obtains and drops a session; each enforces its own same-origin
+	// and lockout checks.
+	r.POST("/api/login", auth.LoginHandler)
+	r.POST("/api/logout", auth.LogoutHandler)
+
 	// Authenticated admin API. Namespaced under /api so the React SPA's
 	// client-side routes (/login, /users, /buckets, ...) cannot shadow a
 	// server route on a browser refresh.
@@ -83,6 +91,7 @@ func NewAdminRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 	// params inherits the same hardening without remembering to opt in.
 	api.Use(middleware.ValidateNames())
 	{
+		api.GET("/session", auth.SessionHandler)
 		api.GET("/config", handlers.GetConfigHandler)
 		api.GET("/stats", handlers.GetStatsHandler)
 		api.GET("/stats/requests", handlers.GetRequestSeriesHandler)

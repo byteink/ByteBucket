@@ -8,7 +8,6 @@ import {
   type CreatedUser,
   type User,
 } from '../lib/admin';
-import { loadSession } from '../lib/session';
 import { errorMessage, formatDate } from '../lib/format';
 import { ErrorBanner } from '../components/ErrorBanner';
 import {
@@ -26,6 +25,7 @@ import {
 } from '../components/ui';
 import { Icon } from '../components/icons';
 import { AccessEditor, isAdminACL, shortAction } from '../components/AccessEditor';
+import { useSession } from '../lib/sessionContext';
 
 const ACTION_WORDS: Record<string, string> = {
   's3:GetObject': 'read',
@@ -60,7 +60,7 @@ interface Editing {
 }
 
 export default function UsersPage() {
-  const [session] = useState(loadSession);
+  const session = useSession();
   const [users, setUsers] = useState<User[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
@@ -72,14 +72,13 @@ export default function UsersPage() {
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
-    if (!session) return;
     setError(null);
     try {
-      setUsers(await listUsers(session));
+      setUsers(await listUsers());
     } catch (e) {
       setError(errorMessage(e));
     }
-  }, [session]);
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -94,9 +93,8 @@ export default function UsersPage() {
   const admins = sorted.filter((u) => isAdminACL(u.acl ?? [])).length;
 
   async function onCreate() {
-    if (!session) return;
     try {
-      setCreated(await createUser(session, []));
+      setCreated(await createUser([]));
       await refresh();
     } catch (e) {
       setError(errorMessage(e));
@@ -104,11 +102,11 @@ export default function UsersPage() {
   }
 
   async function onDelete() {
-    if (!session || !deleting) return;
+    if (!deleting) return;
     setBusy(true);
     setDialogError(null);
     try {
-      await deleteUser(session, deleting);
+      await deleteUser(deleting);
       setDeleting(null);
       await refresh();
     } catch (e) {
@@ -131,11 +129,11 @@ export default function UsersPage() {
   }
 
   async function onSaveAccess() {
-    if (!session || !editing || draft === null) return;
+    if (!editing || draft === null) return;
     setBusy(true);
     setDialogError(null);
     try {
-      await updateUserACL(session, editing.id, normalizeRules(draft));
+      await updateUserACL(editing.id, normalizeRules(draft));
       closeEditor();
       await refresh();
     } catch (e) {
@@ -175,7 +173,7 @@ export default function UsersPage() {
       ) : (
         <UsersTable
           users={visible}
-          self={session?.accessKey ?? ''}
+          self={session.accessKey}
           onEdit={(u) => openEditor(u.accessKeyID, u.acl ?? [])}
           onDelete={setDeleting}
         />

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   deleteObject,
@@ -16,7 +16,6 @@ import {
   type ObjectTag,
   type PresignedURL,
 } from '../lib/s3';
-import { loadSession, type Session } from '../lib/session';
 import { errorMessage, formatBytes, formatCount, formatDateTime } from '../lib/format';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Icon } from '../components/icons';
@@ -62,7 +61,6 @@ export default function ObjectDetailPage() {
   // are part of the object key. Trim a stray leading slash so the wire-shape
   // key matches what other handlers store.
   const key = (params['*'] ?? '').replace(/^\/+/, '');
-  const session = useMemo(() => loadSession(), []);
   const [state, setState] = useState<ObjectState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tags, setTags] = useState<ObjectTag[] | null>(null);
@@ -72,14 +70,14 @@ export default function ObjectDetailPage() {
   const [dialogError, setDialogError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!session || !bucket || !key) return;
+    if (!bucket || !key) return;
     let cancelled = false;
     (async () => {
       const [meta, bucketACL, cfg, tagSet] = await Promise.all([
-        getObjectMetadata(session, bucket, key),
-        getBucketACL(session, bucket),
-        getConfig(session),
-        getObjectTagging(session, bucket, key),
+        getObjectMetadata(bucket, key),
+        getBucketACL(bucket),
+        getConfig(),
+        getObjectTagging(bucket, key),
       ]);
       if (cancelled) return;
       setState({ meta, bucketACL, publicBaseURL: cfg.publicBaseURL });
@@ -90,20 +88,20 @@ export default function ObjectDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [session, bucket, key]);
+  }, [bucket, key]);
 
   const acl = state ? effectiveACL(state) : { acl: 'private' as CannedACL, inherited: true };
   const prefix = key.includes('/') ? key.slice(0, key.lastIndexOf('/') + 1) : '';
   const fileName = key.split('/').pop() ?? key;
 
   function onDownload() {
-    if (session) downloadObject(session, bucket, key).catch((e: unknown) => setError(errorMessage(e)));
+    downloadObject(bucket, key).catch((e: unknown) => setError(errorMessage(e)));
   }
 
   async function setACL(next: CannedACL) {
-    if (!session || !state) return;
-    await putObjectACL(session, bucket, key, next);
-    const meta = await getObjectMetadata(session, bucket, key);
+    if (!state) return;
+    await putObjectACL(bucket, key, next);
+    const meta = await getObjectMetadata(bucket, key);
     setState({ ...state, meta });
   }
 
@@ -130,8 +128,7 @@ export default function ObjectDetailPage() {
   }
 
   async function removeObject() {
-    if (!session) return;
-    await deleteObject(session, bucket, key);
+    await deleteObject(bucket, key);
     navigate(objectListPath(bucket, prefix));
   }
 
@@ -194,12 +191,11 @@ export default function ObjectDetailPage() {
 
       {error && <ErrorBanner message={error} className="mb-4" />}
 
-      {!state || !session ? (
+      {!state ? (
         <Loading />
       ) : (
         <div className="grid grid-cols-[minmax(0,1fr)_400px] gap-10 items-start">
           <ObjectPreview
-            session={session}
             bucket={bucket}
             objectKey={key}
             contentType={state.meta['content-type'] ?? ''}
@@ -209,14 +205,13 @@ export default function ObjectDetailPage() {
           <aside className="flex flex-col gap-7">
             <Details objectKey={key} meta={state.meta} acl={acl} />
             <Share
-              session={session}
               bucket={bucket}
               objectKey={key}
               publicBaseURL={state.publicBaseURL}
               isPublic={acl.acl === 'public-read'}
               onError={setError}
             />
-            {tags && <TagEditor session={session} bucket={bucket} objectKey={key} initial={tags} onError={setError} />}
+            {tags && <TagEditor bucket={bucket} objectKey={key} initial={tags} onError={setError} />}
           </aside>
         </div>
       )}
@@ -282,14 +277,12 @@ function Details({
 }
 
 function Share({
-  session,
   bucket,
   objectKey,
   publicBaseURL,
   isPublic,
   onError,
 }: Readonly<{
-  session: Session;
   bucket: string;
   objectKey: string;
   publicBaseURL: string;
@@ -304,7 +297,7 @@ function Share({
   async function onPresign() {
     setBusy(true);
     try {
-      setPresigned(await presignObject(session, bucket, objectKey, ttl));
+      setPresigned(await presignObject(bucket, objectKey, ttl));
     } catch (e) {
       onError(errorMessage(e));
     } finally {
@@ -376,12 +369,11 @@ function sameTags(a: ObjectTag[], b: ObjectTag[]): boolean {
 }
 
 function TagEditor({
-  session,
   bucket,
   objectKey,
   initial,
   onError,
-}: Readonly<{ session: Session; bucket: string; objectKey: string; initial: ObjectTag[]; onError: (msg: string) => void }>) {
+}: Readonly<{ bucket: string; objectKey: string; initial: ObjectTag[]; onError: (msg: string) => void }>) {
   const [saved, setSaved] = useState<ObjectTag[]>(initial);
   const [tags, setTags] = useState<ObjectTag[]>(initial);
   const [busy, setBusy] = useState(false);
@@ -398,7 +390,7 @@ function TagEditor({
     try {
       // Drop blank-key rows so an empty editor line is not sent as a tag.
       const clean = tags.filter((t) => t.key.trim() !== '');
-      await putObjectTagging(session, bucket, objectKey, clean);
+      await putObjectTagging(bucket, objectKey, clean);
       setSaved(clean);
       setTags(clean);
       setJustSaved(true);

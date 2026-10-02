@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   copyObject,
@@ -12,7 +12,6 @@ import {
   type CannedACL,
 } from '../lib/s3';
 import { buildCrumbs, objectDetailPath } from '../lib/paths';
-import { loadSession } from '../lib/session';
 import { copyText } from '../lib/clipboard';
 import { errorMessage, formatBytes, formatCount, formatDateTime } from '../lib/format';
 import { useObjectListing, type ObjectRow } from '../lib/useObjectListing';
@@ -55,8 +54,7 @@ export default function ObjectsPage() {
   const [params, setParams] = useSearchParams();
   // Current folder, always either "" (bucket root) or ends with "/".
   const prefix = params.get('prefix') ?? '';
-  const session = useMemo(() => loadSession(), []);
-  const listing = useObjectListing(session, bucket, prefix);
+  const listing = useObjectListing(bucket, prefix);
   const { rows, folders, bucketACL, error, hasMore, refresh, setError } = listing;
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState('');
@@ -68,11 +66,10 @@ export default function ObjectsPage() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!session) return;
-    getConfig(session)
+    getConfig()
       .then((cfg) => setPublicBase(cfg.publicBaseURL))
       .catch((e: unknown) => setError(errorMessage(e)));
-  }, [session, setError]);
+  }, [setError]);
 
   useEffect(() => {
     if (!copiedKey) return;
@@ -97,10 +94,10 @@ export default function ObjectsPage() {
   }
 
   async function uploadFiles(files: FileList | File[]) {
-    if (!session || !bucket) return;
+    if (!bucket) return;
     await run(async () => {
       for (const file of Array.from(files)) {
-        await putObject(session, bucket, prefix + file.name, file);
+        await putObject(bucket, prefix + file.name, file);
       }
     });
   }
@@ -144,28 +141,25 @@ export default function ObjectsPage() {
   }
 
   async function setACL(keys: string[], acl: CannedACL) {
-    if (!session) return;
-    for (const key of keys) await putObjectACL(session, bucket, key, acl);
+    for (const key of keys) await putObjectACL(bucket, key, acl);
   }
 
   async function removeKeys(keys: string[]) {
-    if (!session) return;
-    const failures = await deleteObjects(session, bucket, keys);
+    const failures = await deleteObjects(bucket, keys);
     if (failures.length > 0) {
       throw new Error(`${failures.length} object(s) could not be deleted: ${failures.map((f) => f.key).join(', ')}`);
     }
   }
 
   async function moveKey(src: string, dst: string) {
-    if (!session) return;
     // Copy then delete the source: the closest S3 has to an atomic rename.
-    await copyObject(session, bucket, src, dst);
-    await deleteObject(session, bucket, src);
+    await copyObject(bucket, src, dst);
+    await deleteObject(bucket, src);
   }
 
   const actions: RowActions = {
     download: (key) => {
-      if (session) downloadObject(session, bucket, key).catch((e: unknown) => setError(errorMessage(e)));
+      downloadObject(bucket, key).catch((e: unknown) => setError(errorMessage(e)));
     },
     copyURL: (key) => {
       copyText(publicObjectURL(publicBase, bucket, key))

@@ -1,7 +1,7 @@
 // Thin wrapper around fetch for admin API calls.
-// Every call is same-origin and relative; auth is carried in headers only.
+// Every call is same-origin and relative; auth rides the session cookie.
 
-import type { Session } from './session';
+import { apiFetch } from './session';
 
 export interface ACLRule {
   effect: string;
@@ -40,13 +40,6 @@ export interface RateLimitState {
   effective: RateLimitConfig;
 }
 
-function authHeaders(s: Session): HeadersInit {
-  return {
-    'X-Admin-AccessKey': s.accessKey,
-    'X-Admin-Secret': s.secret,
-  };
-}
-
 async function parseError(res: Response): Promise<string> {
   try {
     const body = await res.json();
@@ -59,51 +52,50 @@ async function parseError(res: Response): Promise<string> {
   return `${res.status} ${res.statusText}`;
 }
 
-export async function listUsers(s: Session): Promise<User[]> {
-  const res = await fetch('/api/users', { headers: authHeaders(s) });
+export async function listUsers(): Promise<User[]> {
+  const res = await apiFetch('/api/users');
   if (!res.ok) throw new Error(await parseError(res));
   const data = (await res.json()) as User[] | null;
   return data ?? [];
 }
 
-export async function createUser(s: Session, acl: ACLRule[]): Promise<CreatedUser> {
-  const res = await fetch('/api/users', {
+export async function createUser(acl: ACLRule[]): Promise<CreatedUser> {
+  const res = await apiFetch('/api/users', {
     method: 'POST',
-    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ acl }),
   });
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as CreatedUser;
 }
 
-export async function updateUserACL(s: Session, accessKeyID: string, acl: ACLRule[]): Promise<void> {
-  const res = await fetch(`/api/users/${encodeURIComponent(accessKeyID)}`, {
+export async function updateUserACL(accessKeyID: string, acl: ACLRule[]): Promise<void> {
+  const res = await apiFetch(`/api/users/${encodeURIComponent(accessKeyID)}`, {
     method: 'PUT',
-    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ acl }),
   });
   if (!res.ok) throw new Error(await parseError(res));
 }
 
-export async function deleteUser(s: Session, accessKeyID: string): Promise<void> {
-  const res = await fetch(`/api/users/${encodeURIComponent(accessKeyID)}`, {
+export async function deleteUser(accessKeyID: string): Promise<void> {
+  const res = await apiFetch(`/api/users/${encodeURIComponent(accessKeyID)}`, {
     method: 'DELETE',
-    headers: authHeaders(s),
   });
   if (!res.ok) throw new Error(await parseError(res));
 }
 
-export async function getRateLimit(s: Session): Promise<RateLimitState> {
-  const res = await fetch(RATE_LIMIT_PATH, { headers: authHeaders(s) });
+export async function getRateLimit(): Promise<RateLimitState> {
+  const res = await apiFetch(RATE_LIMIT_PATH);
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as RateLimitState;
 }
 
 // putRateLimit persists a runtime override and returns the now-effective config.
-export async function putRateLimit(s: Session, cfg: RateLimitConfig): Promise<RateLimitConfig> {
-  const res = await fetch(RATE_LIMIT_PATH, {
+export async function putRateLimit(cfg: RateLimitConfig): Promise<RateLimitConfig> {
+  const res = await apiFetch(RATE_LIMIT_PATH, {
     method: 'PUT',
-    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(cfg),
   });
   if (!res.ok) throw new Error(await parseError(res));
@@ -111,8 +103,8 @@ export async function putRateLimit(s: Session, cfg: RateLimitConfig): Promise<Ra
 }
 
 // deleteRateLimit clears the override, reverting to the environment baseline.
-export async function deleteRateLimit(s: Session): Promise<RateLimitConfig> {
-  const res = await fetch(RATE_LIMIT_PATH, { method: 'DELETE', headers: authHeaders(s) });
+export async function deleteRateLimit(): Promise<RateLimitConfig> {
+  const res = await apiFetch(RATE_LIMIT_PATH, { method: 'DELETE' });
   if (!res.ok) throw new Error(await parseError(res));
   return ((await res.json()) as { effective: RateLimitConfig }).effective;
 }
@@ -157,8 +149,8 @@ export interface Stats {
   perBucket: BucketRow[];
 }
 
-export async function getStats(s: Session): Promise<Stats> {
-  const res = await fetch('/api/stats', { headers: authHeaders(s) });
+export async function getStats(): Promise<Stats> {
+  const res = await apiFetch('/api/stats');
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as Stats;
 }
@@ -188,12 +180,10 @@ export interface RequestSeries {
 export type RequestRange = '1h' | '24h' | '7d' | '14d' | '30d';
 
 export async function getRequestSeries(
-  s: Session,
   range: RequestRange,
   offset: number,
 ): Promise<RequestSeries> {
-  const res = await fetch(`/api/stats/requests?range=${range}&offset=${offset}`, {
-    headers: authHeaders(s),
+  const res = await apiFetch(`/api/stats/requests?range=${range}&offset=${offset}`, {
   });
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as RequestSeries;
@@ -226,14 +216,13 @@ export interface LogEvent {
 // getLogs returns recent events of one category newest-first. Pass `before`
 // (the ts of the oldest event already shown) to page into older entries.
 export async function getLogs(
-  s: Session,
   category: LogCategory,
   limit = 50,
   before?: number,
 ): Promise<LogEvent[]> {
   const params = new URLSearchParams({ category, limit: String(limit) });
   if (before) params.set('before', String(before));
-  const res = await fetch(`/api/logs?${params.toString()}`, { headers: authHeaders(s) });
+  const res = await apiFetch(`/api/logs?${params.toString()}`);
   if (!res.ok) throw new Error(await parseError(res));
   return ((await res.json()) as { events: LogEvent[] }).events ?? [];
 }
@@ -250,17 +239,17 @@ export interface AccessLogConfig {
 }
 
 // getAccessLog returns the effective access-log config.
-export async function getAccessLog(s: Session): Promise<AccessLogConfig> {
-  const res = await fetch(ACCESS_LOG_PATH, { headers: authHeaders(s) });
+export async function getAccessLog(): Promise<AccessLogConfig> {
+  const res = await apiFetch(ACCESS_LOG_PATH);
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as AccessLogConfig;
 }
 
 // putAccessLog sets and persists the access-log config, returning the clamped value.
-export async function putAccessLog(s: Session, cfg: AccessLogConfig): Promise<AccessLogConfig> {
-  const res = await fetch(ACCESS_LOG_PATH, {
+export async function putAccessLog(cfg: AccessLogConfig): Promise<AccessLogConfig> {
+  const res = await apiFetch(ACCESS_LOG_PATH, {
     method: 'PUT',
-    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(cfg),
   });
   if (!res.ok) throw new Error(await parseError(res));
@@ -280,17 +269,17 @@ export interface TrustedProxyConfig {
 }
 
 // getTrustedProxy returns the effective trusted-proxy config.
-export async function getTrustedProxy(s: Session): Promise<TrustedProxyConfig> {
-  const res = await fetch(TRUSTED_PROXY_PATH, { headers: authHeaders(s) });
+export async function getTrustedProxy(): Promise<TrustedProxyConfig> {
+  const res = await apiFetch(TRUSTED_PROXY_PATH);
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as TrustedProxyConfig;
 }
 
 // putTrustedProxy persists the trusted-proxy config, returning the cleaned value.
-export async function putTrustedProxy(s: Session, cfg: TrustedProxyConfig): Promise<TrustedProxyConfig> {
-  const res = await fetch(TRUSTED_PROXY_PATH, {
+export async function putTrustedProxy(cfg: TrustedProxyConfig): Promise<TrustedProxyConfig> {
+  const res = await apiFetch(TRUSTED_PROXY_PATH, {
     method: 'PUT',
-    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(cfg),
   });
   if (!res.ok) throw new Error(await parseError(res));
@@ -310,8 +299,8 @@ export interface WhoAmI {
 }
 
 // getWhoAmI returns the resolved client IP for this very request.
-export async function getWhoAmI(s: Session): Promise<WhoAmI> {
-  const res = await fetch('/api/whoami', { headers: authHeaders(s) });
+export async function getWhoAmI(): Promise<WhoAmI> {
+  const res = await apiFetch('/api/whoami');
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as WhoAmI;
 }
@@ -320,17 +309,17 @@ export async function getWhoAmI(s: Session): Promise<WhoAmI> {
 const RETENTION_PATH = '/api/config/retention';
 
 // getRetention returns the request-sample retention window in days.
-export async function getRetention(s: Session): Promise<number> {
-  const res = await fetch(RETENTION_PATH, { headers: authHeaders(s) });
+export async function getRetention(): Promise<number> {
+  const res = await apiFetch(RETENTION_PATH);
   if (!res.ok) throw new Error(await parseError(res));
   return ((await res.json()) as { days: number }).days;
 }
 
 // putRetention sets and persists the retention window, returning the clamped value.
-export async function putRetention(s: Session, days: number): Promise<number> {
-  const res = await fetch(RETENTION_PATH, {
+export async function putRetention(days: number): Promise<number> {
+  const res = await apiFetch(RETENTION_PATH, {
     method: 'PUT',
-    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ days }),
   });
   if (!res.ok) throw new Error(await parseError(res));
@@ -341,35 +330,19 @@ export async function putRetention(s: Session, days: number): Promise<number> {
 const SYNC_WRITES_PATH = '/api/config/sync';
 
 // getSyncWrites returns the effective object-write durability setting.
-export async function getSyncWrites(s: Session): Promise<boolean> {
-  const res = await fetch(SYNC_WRITES_PATH, { headers: authHeaders(s) });
+export async function getSyncWrites(): Promise<boolean> {
+  const res = await apiFetch(SYNC_WRITES_PATH);
   if (!res.ok) throw new Error(await parseError(res));
   return ((await res.json()) as { enabled: boolean }).enabled;
 }
 
 // putSyncWrites sets and persists the durability setting, returning the new value.
-export async function putSyncWrites(s: Session, enabled: boolean): Promise<boolean> {
-  const res = await fetch(SYNC_WRITES_PATH, {
+export async function putSyncWrites(enabled: boolean): Promise<boolean> {
+  const res = await apiFetch(SYNC_WRITES_PATH, {
     method: 'PUT',
-    headers: { ...authHeaders(s), 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
   });
   if (!res.ok) throw new Error(await parseError(res));
   return ((await res.json()) as { enabled: boolean }).enabled;
-}
-
-// checkAdminAuth returns null when the current session is accepted by the admin
-// API, or a string describing the rejection.
-export async function checkAdminAuth(s: Session): Promise<string | null> {
-  try {
-    const res = await fetch('/api/users', { headers: authHeaders(s) });
-    if (res.status === 401 || res.status === 403) {
-      return 'Invalid admin credentials';
-    }
-    if (!res.ok) return await parseError(res);
-    return null;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return `Cannot reach admin API: ${msg}`;
-  }
 }

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getStats, type Stats } from '../lib/admin';
-import { loadSession } from '../lib/session';
 import { errorMessage, formatBytes, formatCount } from '../lib/format';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { RequestChart } from '../components/RequestChart';
@@ -23,7 +22,6 @@ function useNow(): number {
 }
 
 export default function DashboardPage() {
-  const session = loadSession();
   const [stats, setStats] = useState<Stats | null>(null);
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,9 +29,8 @@ export default function DashboardPage() {
   const now = useNow();
 
   useEffect(() => {
-    if (!session) return;
     let live = true;
-    getStats(session)
+    getStats()
       .then((s) => {
         if (!live) return;
         setStats(s);
@@ -44,8 +41,6 @@ export default function DashboardPage() {
     return () => {
       live = false;
     };
-    // session is read once from localStorage; refetching on its identity would loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload]);
 
   const ago = fetchedAt === null ? null : Math.max(0, Math.round((now - fetchedAt) / 1000));

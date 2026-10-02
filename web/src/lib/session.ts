@@ -1,35 +1,72 @@
-// Session lives entirely in localStorage; there are no cookies or server sessions.
-// Keep this file as the only place that knows the storage key or shape.
-//
-// After the same-origin refactor the session only carries admin credentials.
-// All storage traffic goes through /s3/* on the admin port using the same
-// headers, so the browser no longer needs a separate storage endpoint.
+// The admin session lives in an HttpOnly cookie the server sets at login; the
+// browser never stores the secret. This file is the only place that knows the
+// session endpoints and the 401 contract.
 
-const STORAGE_KEY = 'bytebucket_session';
+// Key under which older builds persisted {accessKey, secret} in localStorage.
+// Kept only so purgeLegacySession can delete it from browsers that still
+// carry it.
+export const LEGACY_SESSION_KEY = 'bytebucket_session';
 
 export interface Session {
   accessKey: string;
-  secret: string;
 }
 
-export function loadSession(): Session | null {
+// authEvents carries UNAUTHORIZED whenever an API call comes back 401, so the
+// auth guard can route back to login from one place instead of every page.
+export const authEvents = new EventTarget();
+export const UNAUTHORIZED = 'unauthorized';
+
+export function purgeLegacySession(): void {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<Session>;
-    if (!parsed.accessKey || !parsed.secret) {
-      return null;
-    }
-    return { accessKey: parsed.accessKey, secret: parsed.secret };
+    globalThis.localStorage.removeItem(LEGACY_SESSION_KEY);
   } catch {
-    return null;
+    // Storage blocked (private mode): nothing persisted, nothing to purge.
   }
 }
 
-export function saveSession(s: Session): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+async function errorMessage(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as Record<string, unknown>;
+    const m = body.error ?? body.message;
+    if (typeof m === 'string' && m.length > 0) return m;
+  } catch {
+    /* keep status line */
+  }
+  return `${res.status} ${res.statusText}`;
 }
 
-export function clearSession(): void {
-  localStorage.removeItem(STORAGE_KEY);
+// apiFetch is fetch for authenticated admin API calls: the cookie rides along
+// and a 401 (expired or revoked session) is broadcast before the caller sees it.
+export async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(input, { ...init, credentials: 'same-origin' });
+  if (res.status === 401) authEvents.dispatchEvent(new Event(UNAUTHORIZED));
+  return res;
+}
+
+// login sends the credentials exactly once; the server answers with the
+// session cookie. Uses plain fetch because a 401 here is a form error, not an
+// expired session.
+export async function login(accessKey: string, secret: string): Promise<Session> {
+  const res = await fetch('/api/login', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ accessKey, secret }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return (await res.json()) as Session;
+}
+
+// fetchSession reports the live session, or null when the cookie is missing,
+// expired or revoked.
+export async function fetchSession(): Promise<Session | null> {
+  const res = await fetch('/api/session', { credentials: 'same-origin' });
+  if (res.status === 401) return null;
+  if (!res.ok) throw new Error(await errorMessage(res));
+  return (await res.json()) as Session;
+}
+
+export async function logout(): Promise<void> {
+  const res = await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
+  if (!res.ok) throw new Error(await errorMessage(res));
 }
