@@ -322,6 +322,29 @@ func TestCookieAuth_CrossOriginRejected(t *testing.T) {
 	}
 }
 
+// A browser on a plain-http, non-localhost origin (the admin UI over a LAN or
+// tailnet address) sends neither Sec-Fetch-Site nor Origin on a same-origin
+// GET: Fetch Metadata is only sent to potentially trustworthy URLs, and Origin
+// is omitted for same-origin GET/HEAD. Safe methods change nothing, so they
+// pass on the absence of evidence; explicit cross-origin evidence still fails.
+func TestCookieAuth_SafeMethodWithoutEvidenceAccepted(t *testing.T) {
+	ak, sk := setupStorage(t)
+	useFreshAuthState(t, newFakeClock())
+	r := sessionEngine()
+	tok := loginOK(t, r, ak, sk)
+	if w := doWithCookie(r, http.MethodGet, "/api/session", tok, nil); w.Code != http.StatusOK {
+		t.Fatalf("plain-http same-origin GET: got %d %s", w.Code, w.Body.String())
+	}
+	for name, h := range map[string]map[string]string{
+		"cross-site fetch": {"Sec-Fetch-Site": "cross-site"},
+		"foreign origin":   {"Origin": "http://evil.example"},
+	} {
+		if w := doWithCookie(r, http.MethodGet, "/api/session", tok, h); w.Code != http.StatusForbidden {
+			t.Fatalf("GET %s: got %d, want 403", name, w.Code)
+		}
+	}
+}
+
 func TestCookieAuth_ExpiredSessionRejected(t *testing.T) {
 	ak, sk := setupStorage(t)
 	clk := newFakeClock()

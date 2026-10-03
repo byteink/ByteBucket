@@ -126,6 +126,11 @@ func checkOrigin(r *http.Request) originVerdict {
 	return originSame
 }
 
+// isSafeMethod reports the RFC 9110 safe methods: they must not change state.
+func isSafeMethod(m string) bool {
+	return m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
+}
+
 // requestIsHTTPS reports whether the browser reached us over TLS, directly or
 // through a TLS-terminating proxy. Trusting X-Forwarded-Proto here is safe:
 // a spoofed "https" only adds Secure to the spoofer's own cookie, which a
@@ -200,11 +205,19 @@ func publishAdmin(c *gin.Context, user *storage.User, method string) {
 	c.Next()
 }
 
-// cookieAuth authenticates a browser request by its session cookie. The
-// same-origin proof is mandatory here (defence in depth over SameSite=Strict):
-// a cookie is ambient, so its presence alone proves nothing about intent.
+// cookieAuth authenticates a browser request by its session cookie. A cookie
+// is ambient, so its presence alone proves nothing about intent (defence in
+// depth over SameSite=Strict):
+//   - explicit cross-origin evidence is always rejected;
+//   - a state-changing method must prove same-origin. Browsers always send
+//     Origin on non-GET/HEAD requests, so a missing proof there is suspect;
+//   - a safe method may carry no evidence at all. Over plain http on a
+//     non-localhost host (the admin UI on a LAN or tailnet address) browsers
+//     send neither Sec-Fetch-Site nor Origin on a same-origin GET, and a safe
+//     method changes nothing.
 func cookieAuth(c *gin.Context, token string) {
-	if checkOrigin(c.Request) != originSame {
+	verdict := checkOrigin(c.Request)
+	if verdict == originCross || (verdict == originUnknown && !isSafeMethod(c.Request.Method)) {
 		abortJSON(c, http.StatusForbidden, "Cross-origin request rejected")
 		return
 	}

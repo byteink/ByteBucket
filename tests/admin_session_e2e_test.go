@@ -134,6 +134,11 @@ func TestE2E_Session_CrossOriginCookieRejected(t *testing.T) {
 	if res, _ := sessionDo(t, http.MethodGet, "/api/s3/session-csrf", "", browserSameOrigin, tok); res.StatusCode != http.StatusNotFound {
 		t.Fatalf("rejected cross-origin PUT still created the bucket: got %d", res.StatusCode)
 	}
+	// The admin UI over plain http on a LAN or tailnet host sends neither
+	// Sec-Fetch-Site nor Origin on a same-origin GET.
+	if res, body := sessionDo(t, http.MethodGet, "/api/users", "", map[string]string{}, tok); res.StatusCode != http.StatusOK {
+		t.Fatalf("plain-http same-origin GET: got %d %s", res.StatusCode, body)
+	}
 }
 
 func TestE2E_Session_LogoutRevokesServerSide(t *testing.T) {
