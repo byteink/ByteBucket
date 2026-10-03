@@ -85,7 +85,7 @@ All configuration is via environment variables.
 | `ENCRYPTION_KEY` | yes | — | 32 raw bytes or base64-encoded 32-byte key. Encrypts stored user secrets at rest. Lose it, lose every credential. Rotate carefully. |
 | `ACCESS_KEY_ID` | first boot only | — | Super-user access key, used once to seed the user database. |
 | `SECRET_ACCESS_KEY` | first boot only | — | Super-user secret, same. |
-| `GIN_MODE` | no | `debug` | Set to `release` in production. The provided Docker image sets this. |
+| `GIN_MODE` | no | `release` | Gin mode. Defaults to `release`; set `debug` for local route logging. |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn`, `error`. |
 | `LOG_FORMAT` | no | `json` | `json` for production / log aggregators, `text` for local dev readability. |
 | `PUBLIC_BASE_URL` | no | `http://localhost:9000` | Public origin of the S3 storage surface. Anchors the admin UI's shareable links and server-minted presigned URLs. Defaults to the localhost storage port so presign and public links work out of the box; set it (e.g. `https://bb.example.com`) when ports are remapped or a proxy terminates TLS. |

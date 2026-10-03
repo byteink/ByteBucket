@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestParseBoolEnv(t *testing.T) {
@@ -144,4 +146,21 @@ func TestLoadEncryptionKey(t *testing.T) {
 			t.Fatal("undecodable key must error")
 		}
 	})
+}
+
+func TestConfigureGinMode(t *testing.T) {
+	t.Cleanup(func() { gin.SetMode(gin.TestMode) })
+	// Unset must mean release: the image and every consumer deploy without
+	// GIN_MODE, and gin's own default is debug.
+	t.Setenv("GIN_MODE", "")
+	configureGinMode()
+	if gin.Mode() != gin.ReleaseMode {
+		t.Fatalf("unset: got %q want %q", gin.Mode(), gin.ReleaseMode)
+	}
+	// An explicit value is honoured so local dev can still opt into debug.
+	t.Setenv("GIN_MODE", gin.DebugMode)
+	configureGinMode()
+	if gin.Mode() != gin.DebugMode {
+		t.Fatalf("explicit: got %q want %q", gin.Mode(), gin.DebugMode)
+	}
 }

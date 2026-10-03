@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"ByteBucket/internal/handlers"
 	"ByteBucket/internal/middleware"
 	"ByteBucket/internal/router"
@@ -178,6 +180,7 @@ func main() {
 	// subsequent message — including directory creation and credential
 	// bootstrapping — flows through the configured handler.
 	configureLogger()
+	configureGinMode()
 
 	// NotifyContext gives a single cancellable context that trips on either a
 	// user-initiated Ctrl+C (SIGINT) or an orchestrator-initiated SIGTERM. The
@@ -189,6 +192,17 @@ func main() {
 		slog.Error("server error", "err", err.Error())
 		os.Exit(1)
 	}
+}
+
+// configureGinMode defaults gin to release mode. Gin itself defaults to debug,
+// which logs every route and warns at startup, and no deployment sets
+// GIN_MODE (the image never did). An explicit GIN_MODE is still honoured.
+func configureGinMode() {
+	if mode := strings.TrimSpace(os.Getenv("GIN_MODE")); mode != "" {
+		gin.SetMode(mode)
+		return
+	}
+	gin.SetMode(gin.ReleaseMode)
 }
 
 // configureLogger wires slog's default handler from environment variables so
