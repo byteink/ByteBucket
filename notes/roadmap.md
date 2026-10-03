@@ -278,3 +278,15 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   tightened (style-src 'self', object-src 'none', form-action 'self'). UI
   purges the legacy bytebucket_session key on load. vitest added for web lib
   tests.
+- 2026-10-03: failed-auth IP ban DONE (opt-in, off by default). Prod logs showed
+  anonymous scanners guessing bucket/key names on :9000 (all 401). New
+  middleware/ipban.go mirrors the rate limiter: IP_BAN_* env baseline, runtime
+  override at /api/config/ipban (GET/PUT/DELETE, persisted, wins), atomic config
+  pointer, disabled path = one atomic load. Counts only final 401/403 per
+  resolved client IP in a fixed window (404 never counts: imgproxy fetches
+  deleted objects); banned IPs get 403 AccessDenied before auth, fixed length,
+  no ratchet. Loopback/private/link-local/CGNAT/unparseable never banned, so a
+  misconfigured proxy cannot get banned. Both tables capped at 65536 with
+  eviction + janitor (~17 MiB measured worst case). Storage surface only; admin
+  keeps its own lockout. Saving the setting lifts all bans; no per-IP unban list
+  or banned-IP viewer yet. Settings UI section + probe group (probes_ipban.sh).

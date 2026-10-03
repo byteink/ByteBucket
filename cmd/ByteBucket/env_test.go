@@ -1,11 +1,19 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"ByteBucket/internal/middleware"
+	"ByteBucket/internal/storage"
 )
 
 func TestParseBoolEnv(t *testing.T) {
@@ -79,6 +87,125 @@ func TestLoadRateLimitConfig_ReadsAllFields(t *testing.T) {
 	cfg := loadRateLimitConfig()
 	if !cfg.Enabled || cfg.RPS != 10.5 || cfg.Burst != 20 {
 		t.Fatalf("unexpected cfg: %+v", cfg)
+	}
+}
+
+func TestLoadIPBanConfig(t *testing.T) {
+	keys := []string{"IP_BAN_ENABLED", "IP_BAN_MAX_FAILURES", "IP_BAN_WINDOW_SECONDS", "IP_BAN_SECONDS"}
+	set := func(t *testing.T, vals ...string) {
+		for i, k := range keys {
+			t.Setenv(k, vals[i])
+		}
+	}
+	t.Run("defaults when unset", func(t *testing.T) {
+		set(t, "", "", "", "")
+		if got := loadIPBanConfig(); got != middleware.DefaultIPBanConfig() {
+			t.Fatalf("defaults = %+v", got)
+		}
+	})
+	t.Run("reads all fields", func(t *testing.T) {
+		set(t, "true", "5", "30", "120")
+		want := middleware.IPBanConfig{Enabled: true, MaxFailures: 5, WindowSeconds: 30, BanSeconds: 120}
+		if got := loadIPBanConfig(); got != want {
+			t.Fatalf("cfg = %+v, want %+v", got, want)
+		}
+	})
+	t.Run("out-of-range fields fall back to defaults", func(t *testing.T) {
+		set(t, "true", "0", "7200", "abc")
+		want := middleware.IPBanConfig{Enabled: true, MaxFailures: 20, WindowSeconds: 60, BanSeconds: 900}
+		if got := loadIPBanConfig(); got != want {
+			t.Fatalf("cfg = %+v, want %+v", got, want)
+		}
+	})
+}
+
+// initTestStore opens an isolated BoltDB in a temp dir, mirroring the handlers
+// package fixture, so the startup override path runs for real.
+func initTestStore(t *testing.T) {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	if err := storage.InitUserStore(fmt.Sprintf("users-%d.db", time.Now().UnixNano())); err != nil {
+		t.Fatalf("InitUserStore: %v", err)
+	}
+}
+
+// initIPBan seeds the controller from env, then lets a persisted override win.
+func TestInitIPBan(t *testing.T) {
+	initTestStore(t)
+	t.Setenv("IP_BAN_ENABLED", "true")
+	t.Setenv("IP_BAN_MAX_FAILURES", "4")
+	t.Setenv("IP_BAN_WINDOW_SECONDS", "")
+	t.Setenv("IP_BAN_SECONDS", "")
+	ctrl, err := initIPBan()
+	if err != nil {
+		t.Fatalf("initIPBan: %v", err)
+	}
+	if got := ctrl.Current(); !got.Enabled || got.MaxFailures != 4 || got.BanSeconds != 900 {
+		t.Fatalf("env seed = %+v", got)
+	}
+
+	if err := storage.PutConfigValue("ipban", []byte(`{"enabled":false,"maxFailures":9,"windowSeconds":10,"banSeconds":30}`)); err != nil {
+		t.Fatalf("seed override: %v", err)
+	}
+	ctrl, err = initIPBan()
+	if err != nil {
+		t.Fatalf("initIPBan with override: %v", err)
+	}
+	want := middleware.IPBanConfig{MaxFailures: 9, WindowSeconds: 10, BanSeconds: 30}
+	if got := ctrl.Current(); got != want {
+		t.Fatalf("override = %+v, want %+v", got, want)
+	}
+
+	restore := storage.SetConfigStoreFaultForTest(errors.New("injected"))
+	defer restore()
+	if _, err := initIPBan(); err == nil {
+		t.Fatal("store read fault swallowed")
+	}
+}
+
+// The other startup helpers share initIPBan's shape: seed from env, apply any
+// persisted override, and abort startup on a store read fault.
+func TestInitHelpers(t *testing.T) {
+	initTestStore(t)
+	if err := storage.InitEventStore(fmt.Sprintf("logs-%d.db", time.Now().UnixNano())); err != nil {
+		t.Fatalf("InitEventStore: %v", err)
+	}
+	t.Setenv("RATE_LIMIT_ENABLED", "true")
+	t.Setenv("RATE_LIMIT_RPS", "5")
+	t.Setenv("RATE_LIMIT_BURST", "7")
+	t.Setenv("TRUSTED_PROXY_HEADERS", "CF-Connecting-IP")
+	t.Cleanup(func() { storage.SetTrustedProxy(storage.TrustedProxyConfig{}) })
+
+	rl, err := initRateLimit()
+	if err != nil || !rl.Current().Enabled || rl.Current().Burst != 7 {
+		t.Fatalf("initRateLimit = %+v (%v)", rl, err)
+	}
+	if err := initTrustedProxy(); err != nil || storage.TrustedProxy().Headers[0] != "CF-Connecting-IP" {
+		t.Fatalf("initTrustedProxy = %v, cfg %+v", err, storage.TrustedProxy())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := initAccessLog(ctx); err != nil {
+		t.Fatalf("initAccessLog: %v", err)
+	}
+	cancel()
+
+	restore := storage.SetConfigStoreFaultForTest(errors.New("injected"))
+	defer restore()
+	if _, err := initRateLimit(); err == nil {
+		t.Fatal("initRateLimit swallowed a store fault")
+	}
+	if err := initTrustedProxy(); err == nil {
+		t.Fatal("initTrustedProxy swallowed a store fault")
+	}
+	if err := initAccessLog(context.Background()); err == nil {
+		t.Fatal("initAccessLog swallowed a store fault")
 	}
 }
 

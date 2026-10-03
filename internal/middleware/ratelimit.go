@@ -316,26 +316,30 @@ func RateLimit(cfg RateLimitConfig) gin.HandlerFunc {
 // writeSlowDown emits a protocol-correct throttle response and aborts the
 // chain. The status is 503 with the S3 SlowDown code: AWS SDKs classify
 // SlowDown as retryable and apply exponential backoff, so an S3 client is
-// nudged to slow down rather than failing hard. Admin/JSON callers get the
-// same code in JSON.
-//
-// The shape reuses this package's s3ErrorBody (defined in body_limit.go) and
-// pulls the request ID from the x-amz-request-id response header set earlier
-// in the chain, exactly as writeEntityTooLarge does, so the limiter stays free
-// of a handlers import that would form a cycle.
+// nudged to slow down rather than failing hard.
 func writeSlowDown(c *gin.Context) {
+	writeS3Error(c, http.StatusServiceUnavailable, "SlowDown", slowDownMessage)
+}
+
+// writeS3Error writes an S3-shaped error body (XML, or JSON for admin/JSON
+// callers) and aborts the chain. It reuses this package's s3ErrorBody
+// (defined in body_limit.go) and pulls the request ID from the
+// x-amz-request-id response header set earlier in the chain, exactly as
+// writeEntityTooLarge does, so the middleware stays free of a handlers import
+// that would form a cycle.
+func writeS3Error(c *gin.Context, status int, code, message string) {
 	body := s3ErrorBody{
-		Code:      "SlowDown",
-		Message:   slowDownMessage,
+		Code:      code,
+		Message:   message,
 		RequestId: c.Writer.Header().Get(requestIDHeader),
 	}
 	if prefersJSON(c.Request) {
 		c.Header("Content-Type", "application/json")
-		c.AbortWithStatus(http.StatusServiceUnavailable)
+		c.AbortWithStatus(status)
 		_ = json.NewEncoder(c.Writer).Encode(body)
 		return
 	}
 	c.Header("Content-Type", "application/xml")
-	c.AbortWithStatus(http.StatusServiceUnavailable)
+	c.AbortWithStatus(status)
 	_ = xml.NewEncoder(c.Writer).Encode(body)
 }

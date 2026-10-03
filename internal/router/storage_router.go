@@ -29,9 +29,10 @@ func faviconHandler(c *gin.Context) {
 // manner. The route table is shared with the admin router via
 // RegisterStorageRoutes; this function only wires the SigV4-specific
 // middleware and public endpoints. rlCtrl carries the live rate-limit
-// controller shared with the admin router; its middleware is always mounted
-// and short-circuits when limiting is disabled.
-func NewStorageRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
+// controller shared with the admin router; banCtrl the failed-auth ban, which
+// exists only on this surface. Both middlewares are always mounted and
+// short-circuit when disabled.
+func NewStorageRouter(rlCtrl *middleware.RateLimitController, banCtrl *middleware.IPBanController) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
@@ -56,6 +57,12 @@ func NewStorageRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 	// Data-plane access log. Same data-plane scope as S3RequestOutcome; a no-op
 	// (one atomic load) when access logging is disabled.
 	r.Use(middleware.AccessLog())
+
+	// Failed-auth ban runs after the access log (so refused requests are still
+	// recorded) and before rate limiting and auth: a banned scanner is refused
+	// with one map lookup, without consuming a limiter slot or reaching
+	// signature verification. It must wrap auth to see the final 401/403.
+	r.Use(banCtrl.Middleware())
 
 	// Rate limiting runs after Log/Metrics so a throttled request is still
 	// observed and ID-tagged, but BEFORE auth and CORS so an unauthenticated

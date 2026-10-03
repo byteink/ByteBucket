@@ -94,6 +94,10 @@ All configuration is via environment variables.
 | `RATE_LIMIT_RPS` | no | `0` | Sustained requests per second allowed per client IP (token refill rate). Only meaningful when limiting is enabled. |
 | `RATE_LIMIT_BURST` | no | `0` | Token-bucket depth: the largest instantaneous spike one client may make before the sustained `RPS` rate gates it. |
 | `RATE_LIMIT_TRUSTED_PROXIES` | no | `0` | Number of reverse-proxy hops in front of the server. Selects which `X-Forwarded-For` entry is the real client. `0` ignores `X-Forwarded-For` and keys on the socket peer. |
+| `IP_BAN_ENABLED` | no | `false` | Master switch for the failed-auth IP ban on the S3 port (see below). Off by default; when disabled the middleware short-circuits after one atomic read. Seeds the baseline that a runtime override can replace. |
+| `IP_BAN_MAX_FAILURES` | no | `20` | `401`/`403` responses from one client IP that trigger a ban. `1`-`10000`. |
+| `IP_BAN_WINDOW_SECONDS` | no | `60` | Window, in seconds, the failures must fall within. `1`-`3600`. |
+| `IP_BAN_SECONDS` | no | `900` | Ban length in seconds (15 minutes). Fixed: requests made while banned do not extend it. `1`-`604800` (7 days). |
 
 ### Rate limiting
 
@@ -103,6 +107,17 @@ Off by default. Set `RATE_LIMIT_ENABLED=true` to throttle requests per client IP
 - **Behind a proxy**, set `RATE_LIMIT_TRUSTED_PROXIES` to the number of hops in front of ByteBucket (e.g. `1` for a single nginx / traefik / ALB). The client IP is resolved by counting that many trusted hops in from the right of `X-Forwarded-For`; the nearest proxy is the connection peer and is not in the header. Leaving it at `0` ignores `X-Forwarded-For` and keys on the socket peer — correct only when ByteBucket is directly exposed. Match it to your actual topology: setting it too low lets a client spoof its limiter key by prepending `X-Forwarded-For` entries.
 - The limiter store is bounded (hard entry cap plus idle eviction), so it cannot be turned into a memory-exhaustion vector by an attacker minting source IPs.
 - **Runtime override.** The `RATE_LIMIT_*` variables are only the startup baseline. An admin can enable, disable, or retune limiting at runtime from the dashboard's **Settings** page (or `PUT /api/config/ratelimit`) without a restart; changes apply live to both ports. A saved override is persisted and **wins over the environment** until you clear it ("Reset to environment" / `DELETE /api/config/ratelimit`), which reverts to the `RATE_LIMIT_*` baseline.
+
+### Failed-auth IP ban
+
+Off by default. A fail2ban-style guard for the S3 port (`:9000`): a client IP that produces `IP_BAN_MAX_FAILURES` authentication failures (final status `401` or `403`) within `IP_BAN_WINDOW_SECONDS` is refused for `IP_BAN_SECONDS`, then let back in automatically. It is aimed at scanners that guess bucket and key names (`GET /backups/db.sql`, ...) and only ever get `401`.
+
+- **What counts.** Only `401` and `403`. `404` never counts, so a client such as imgproxy fetching deleted objects is never banned; `400`, `429` and `5xx` do not count either.
+- **While banned**, every request from that IP gets `403 AccessDenied` (S3 XML, or JSON when the client asks for it) before auth or any handler runs. Banned requests neither count as failures nor extend the ban. One `ip banned` log line (`ip`, `failures`, `ban_until`) is written when a ban starts; blocked requests show up only in the normal access log.
+- **Never banned:** loopback, private (RFC 1918, `fc00::/7`), link-local, CGNAT (`100.64.0.0/10`) and unparseable addresses. If the trusted-proxy headers are misconfigured, every request resolves to the reverse proxy's internal address, and banning it would take the whole service down. The flip side: behind a proxy the ban only works once the trusted-proxy headers are set (Settings page), so it sees the real client.
+- **Admin port is not covered.** It has its own credential lockout (see [Admin web UI](#admin-web-ui)).
+- **Bounded memory.** The failure counters and the ban table are each capped at 65,536 IPs (about 17 MiB worst case in total, measured with full IPv6 keys), with eviction of the oldest entry when full and a background sweep of expired entries.
+- **Runtime override.** Like rate limiting, the `IP_BAN_*` variables are only the startup baseline. Change it from the dashboard's **Settings** page or `PUT /api/config/ipban` (`{"enabled":true,"maxFailures":20,"windowSeconds":60,"banSeconds":900}`); `GET` returns `env`, `override` and `effective`, and `DELETE` reverts to the environment. Out-of-range values are rejected with `400`. Saving (or clearing) the setting lifts every active ban; there is no per-IP unban list.
 
 ### Ports
 
@@ -450,6 +465,7 @@ Everything lives under `/data`:
 - **Multipart**: 1 to 10000 parts per upload, no minimum part size enforced (real S3 requires 5 MiB for all but the last part — ByteBucket is lenient).
 - **Object tags**: up to 10 per object; key 1-128 and value 0-256 UTF-8 chars; no duplicate keys; tagging document capped at 16 KiB.
 - **Rate limiting**: off by default (see [Configuration](#configuration)). When enabled, requests are throttled per client IP and over-limit calls get `503 SlowDown` with `Retry-After`.
+- **Failed-auth IP ban**: off by default (see [Failed-auth IP ban](#failed-auth-ip-ban)). When enabled, a public client IP with too many `401`/`403` responses on port 9000 gets `403 AccessDenied` until the ban expires.
 - **Presigned URL expiry**: bounded by the request's `X-Amz-Expires` claim; no server-side cap beyond what the client signed.
 - **Versioning, object locking, server-side encryption, replication, and lifecycle policies**: not implemented.
 - **BoltDB** is a single-writer embedded DB. Fine for up to tens of thousands of users on a single node; don't expect horizontal scale.

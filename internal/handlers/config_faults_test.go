@@ -24,6 +24,7 @@ func TestConfigHandlers_PersistFailures(t *testing.T) {
 
 	ctrl := middleware.NewRateLimitController(middleware.RateLimitConfig{})
 	SetRateLimitController(ctrl, middleware.RateLimitConfig{})
+	SetIPBanController(middleware.NewIPBanController(middleware.DefaultIPBanConfig()), middleware.DefaultIPBanConfig())
 
 	cases := []struct {
 		name    string
@@ -38,6 +39,9 @@ func TestConfigHandlers_PersistFailures(t *testing.T) {
 		{"ratelimit put", http.MethodPut, PutRateLimitHandler, `{"enabled":true,"rps":5,"burst":5}`},
 		{"ratelimit get", http.MethodGet, GetRateLimitHandler, ""},
 		{"ratelimit delete", http.MethodDelete, DeleteRateLimitHandler, ""},
+		{"ipban put", http.MethodPut, PutIPBanHandler, `{"enabled":true,"maxFailures":5,"windowSeconds":60,"banSeconds":60}`},
+		{"ipban get", http.MethodGet, GetIPBanHandler, ""},
+		{"ipban delete", http.MethodDelete, DeleteIPBanHandler, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -60,6 +64,7 @@ func TestConfigInit_ReadFailures(t *testing.T) {
 	setupHandlerStore(t)
 	ctrl := middleware.NewRateLimitController(middleware.RateLimitConfig{})
 	SetRateLimitController(ctrl, middleware.RateLimitConfig{})
+	SetIPBanController(middleware.NewIPBanController(middleware.DefaultIPBanConfig()), middleware.DefaultIPBanConfig())
 
 	restore := storage.SetConfigStoreFaultForTest(errInjectedStoreFault)
 	defer restore()
@@ -73,6 +78,7 @@ func TestConfigInit_ReadFailures(t *testing.T) {
 		{"retention", func() error { _, err := InitRequestRetentionFromStore(); return err }},
 		{"sync", func() error { _, err := InitSyncWritesFromStore(); return err }},
 		{"ratelimit", func() error { _, err := InitRateLimitFromStore(); return err }},
+		{"ipban", func() error { _, err := InitIPBanFromStore(); return err }},
 	}
 	for _, tc := range inits {
 		t.Run(tc.name, func(t *testing.T) {

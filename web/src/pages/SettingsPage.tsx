@@ -1,24 +1,28 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import {
+  deleteIPBan,
   deleteRateLimit,
   getAccessLog,
+  getIPBan,
   getRateLimit,
   getRetention,
   getSyncWrites,
   getTrustedProxy,
   getWhoAmI,
   putAccessLog,
+  putIPBan,
   putRateLimit,
   putRetention,
   putSyncWrites,
   putTrustedProxy,
   type AccessLogConfig,
+  type IPBanConfig,
   type RateLimitConfig,
-  type RateLimitState,
   type TrustedProxyConfig,
   type WhoAmI,
 } from '../lib/admin';
 import { errorMessage } from '../lib/format';
+import { IP_BAN_LIMITS, ipBanError } from '../lib/ipban';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Loading, PageHeader, Saved, Tip } from '../components/ui';
 
@@ -155,35 +159,77 @@ function SaveRow({
   );
 }
 
-function RateLimitSection() {
-  const { value: state, setValue: setState, error, busy, run } = useSetting(getRateLimit);
-  const [form, setForm] = useState<RateLimitConfig | null>(null);
+// OverrideState is the env / override / effective triple the env-seeded
+// settings (rate limit, IP ban) report.
+interface OverrideState<T> {
+  env: T;
+  override: T | null;
+  effective: T;
+}
+
+// useOverride owns the draft, save and reset-to-environment lifecycle shared by
+// every env-seeded setting with a runtime override.
+function useOverride<T>(
+  load: () => Promise<OverrideState<T>>,
+  put: (cfg: T) => Promise<T>,
+  del: () => Promise<T>,
+) {
+  const { value: state, setValue: setState, error, busy, run } = useSetting(load);
+  const [form, setForm] = useState<T | null>(null);
   const draft = form ?? state?.effective ?? null;
 
-  function edit(p: Partial<RateLimitConfig>) {
+  function edit(p: Partial<T>) {
     if (draft) setForm({ ...draft, ...p });
-  }
-
-  function apply(next: RateLimitState) {
-    setState(next);
-    setForm(null);
   }
 
   function onSave() {
     if (!state || !draft) return;
     run(async () => {
-      const effective = await putRateLimit(draft);
-      apply({ env: state.env, override: draft, effective });
+      const effective = await put(draft);
+      setState({ env: state.env, override: draft, effective });
+      setForm(null);
     });
   }
 
   function onReset() {
     if (!state) return;
     run(async () => {
-      const effective = await deleteRateLimit();
-      apply({ env: state.env, override: null, effective });
+      const effective = await del();
+      setState({ env: state.env, override: null, effective });
+      setForm(null);
     });
   }
+
+  return { state, draft, edit, error, busy, onSave, onReset };
+}
+
+function OverrideSaveRow({
+  busy,
+  disabled = false,
+  hasOverride,
+  onSave,
+  onReset,
+}: Readonly<{ busy: boolean; disabled?: boolean; hasOverride: boolean; onSave: () => void; onReset: () => void }>) {
+  return (
+    <SaveRow busy={busy} disabled={disabled} onSave={onSave}>
+      <Tip text="Drop the override and use the environment values">
+        <button type="button" className="btn" disabled={busy || !hasOverride} onClick={onReset}>
+          Reset to environment
+        </button>
+      </Tip>
+      <span className="ml-auto">
+        <Saved text={hasOverride ? 'Runtime override' : 'Environment values'} />
+      </span>
+    </SaveRow>
+  );
+}
+
+function RateLimitSection() {
+  const { state, draft, edit, error, busy, onSave, onReset } = useOverride<RateLimitConfig>(
+    getRateLimit,
+    putRateLimit,
+    deleteRateLimit,
+  );
 
   return (
     <Section
@@ -216,16 +262,79 @@ function RateLimitSection() {
               onChange={(v) => edit({ burst: Math.trunc(v) })}
             />
           </div>
-          <SaveRow busy={busy} onSave={onSave}>
-            <Tip text="Drop the override and use the environment values">
-              <button type="button" className="btn" disabled={busy || !state.override} onClick={onReset}>
-                Reset to environment
-              </button>
-            </Tip>
-            <span className="ml-auto">
-              <Saved text={state.override ? 'Runtime override' : 'Environment values'} />
-            </span>
-          </SaveRow>
+          <OverrideSaveRow busy={busy} hasOverride={state.override !== null} onSave={onSave} onReset={onReset} />
+        </>
+      )}
+    </Section>
+  );
+}
+
+function IPBanSection() {
+  const { state, draft, edit, error, busy, onSave, onReset } = useOverride<IPBanConfig>(getIPBan, putIPBan, deleteIPBan);
+  const invalid = draft ? ipBanError(draft) : null;
+
+  return (
+    <Section
+      title="Failed-auth ban"
+      desc="Blocks a client IP on the S3 port for a while after too many failed sign-ins (401/403) in a short window. Private and loopback addresses are never banned. Overrides the IP_BAN_* environment values."
+    >
+      {error && <ErrorBanner message={error} />}
+      {!state || !draft ? (
+        <Loading />
+      ) : (
+        <>
+          <Check
+            label="Ban IPs after repeated auth failures"
+            checked={draft.enabled}
+            disabled={busy}
+            onChange={(v) => edit({ enabled: v })}
+          />
+          <div className="row">
+            <Num
+              id="ib-max"
+              label="Max failures"
+              value={draft.maxFailures}
+              step="1"
+              min={1}
+              max={IP_BAN_LIMITS.maxFailures}
+              hint={`Environment: ${state.env.maxFailures}`}
+              onChange={(v) => edit({ maxFailures: v })}
+            />
+            <Num
+              id="ib-window"
+              label="Window (seconds)"
+              value={draft.windowSeconds}
+              step="1"
+              min={1}
+              max={IP_BAN_LIMITS.windowSeconds}
+              hint={`Environment: ${state.env.windowSeconds}`}
+              onChange={(v) => edit({ windowSeconds: v })}
+            />
+            <Num
+              id="ib-ban"
+              label="Ban duration (seconds)"
+              value={draft.banSeconds}
+              step="60"
+              min={1}
+              max={IP_BAN_LIMITS.banSeconds}
+              hint={`Environment: ${state.env.banSeconds}`}
+              onChange={(v) => edit({ banSeconds: v })}
+            />
+          </div>
+          {invalid ? (
+            <p className="hint mt-0 text-danger" role="alert">
+              {invalid}
+            </p>
+          ) : (
+            <p className="hint mt-0">Saving lifts every active ban.</p>
+          )}
+          <OverrideSaveRow
+            busy={busy}
+            disabled={invalid !== null}
+            hasOverride={state.override !== null}
+            onSave={onSave}
+            onReset={onReset}
+          />
         </>
       )}
     </Section>
@@ -548,6 +657,7 @@ export default function SettingsPage() {
         sub="Runtime configuration. Saved values apply immediately on both ports and persist across restarts."
       />
       <RateLimitSection />
+      <IPBanSection />
       <TrustedProxySection />
       <DurabilitySection />
       <AccessLogSection />

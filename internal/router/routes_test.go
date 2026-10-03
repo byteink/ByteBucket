@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"ByteBucket/internal/middleware"
@@ -27,7 +28,7 @@ func routeExists(r *gin.Engine, method, path string) bool {
 // a spot check.
 func TestStorageRouterRegistersS3Surface(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	r := NewStorageRouter(middleware.NewRateLimitController(middleware.RateLimitConfig{}))
+	r := NewStorageRouter(middleware.NewRateLimitController(middleware.RateLimitConfig{}), middleware.NewIPBanController(middleware.DefaultIPBanConfig()))
 
 	cases := []struct{ method, path string }{
 		{"GET", "/"},
@@ -54,7 +55,7 @@ func TestStorageRouterRegistersS3Surface(t *testing.T) {
 // clean 404 — never the bucket-name 400.
 func TestStorageRouterServesFavicon(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	r := NewStorageRouter(middleware.NewRateLimitController(middleware.RateLimitConfig{}))
+	r := NewStorageRouter(middleware.NewRateLimitController(middleware.RateLimitConfig{}), middleware.NewIPBanController(middleware.DefaultIPBanConfig()))
 
 	if !routeExists(r, "GET", "/favicon.ico") {
 		t.Fatal("storage router missing GET /favicon.ico")
@@ -123,6 +124,52 @@ func TestAdminRouterMountsSessionRoutes(t *testing.T) {
 		r.ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
 		if w.Code != tc.want {
 			t.Errorf("%s %s: got %d, want %d", tc.method, tc.path, w.Code, tc.want)
+		}
+	}
+}
+
+// The failed-auth ban must be wired into the storage chain ahead of SigV4
+// auth: auth produces the 401 that counts, and the next request from the same
+// public IP is refused with AccessDenied before auth runs again.
+func TestStorageRouterMountsIPBan(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ban := middleware.NewIPBanController(middleware.IPBanConfig{Enabled: true, MaxFailures: 1, WindowSeconds: 60, BanSeconds: 60})
+	r := NewStorageRouter(middleware.NewRateLimitController(middleware.RateLimitConfig{}), ban)
+
+	do := func(peer string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/nobucket/backup.sql", nil)
+		req.RemoteAddr = peer + ":4000"
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+	if w := do("203.0.113.9"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("first anonymous request = %d, want 401 from auth", w.Code)
+	}
+	w := do("203.0.113.9")
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "<Code>AccessDenied</Code>") {
+		t.Fatalf("banned request = %d %s, want 403 AccessDenied", w.Code, w.Body.String())
+	}
+	if w := do("10.0.0.9"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("private peer = %d, want 401", w.Code)
+	}
+	if w := do("10.0.0.9"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("private peer banned: %d", w.Code)
+	}
+}
+
+// The ban config is admin-managed at /api/config/ipban, behind admin auth.
+func TestAdminRouterMountsIPBanConfig(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := NewAdminRouter(middleware.NewRateLimitController(middleware.RateLimitConfig{}))
+	for _, m := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+		if !routeExists(r, m, "/api/config/ipban") {
+			t.Fatalf("admin router missing %s /api/config/ipban", m)
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(m, "/api/config/ipban", nil))
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("anonymous %s /api/config/ipban = %d, want 401", m, w.Code)
 		}
 	}
 }

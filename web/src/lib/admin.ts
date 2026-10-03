@@ -109,6 +109,50 @@ export async function deleteRateLimit(): Promise<RateLimitConfig> {
   return ((await res.json()) as { effective: RateLimitConfig }).effective;
 }
 
+// Admin API subpath for the failed-auth IP ban override (GET/PUT/DELETE).
+const IP_BAN_PATH = '/api/config/ipban';
+
+// IPBanConfig mirrors the server's wire shape (internal/handlers/ipban).
+export interface IPBanConfig {
+  enabled: boolean;
+  maxFailures: number;
+  windowSeconds: number;
+  banSeconds: number;
+}
+
+// IPBanState carries the environment baseline, the persisted override (null
+// when none), and the effective config currently enforced.
+export interface IPBanState {
+  env: IPBanConfig;
+  override: IPBanConfig | null;
+  effective: IPBanConfig;
+}
+
+export async function getIPBan(): Promise<IPBanState> {
+  const res = await apiFetch(IP_BAN_PATH);
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as IPBanState;
+}
+
+// putIPBan persists a runtime override and returns the now-effective config.
+// The server flushes the ban table on every save, lifting all active bans.
+export async function putIPBan(cfg: IPBanConfig): Promise<IPBanConfig> {
+  const res = await apiFetch(IP_BAN_PATH, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return ((await res.json()) as { effective: IPBanConfig }).effective;
+}
+
+// deleteIPBan clears the override, reverting to the environment baseline.
+export async function deleteIPBan(): Promise<IPBanConfig> {
+  const res = await apiFetch(IP_BAN_PATH, { method: 'DELETE' });
+  if (!res.ok) throw new Error(await parseError(res));
+  return ((await res.json()) as { effective: IPBanConfig }).effective;
+}
+
 // BucketActivity is cumulative S3 object-operation activity (a total or per bucket).
 export interface BucketActivity {
   uploads: number;

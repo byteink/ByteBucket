@@ -31,6 +31,12 @@ suitable for a private / localhost deployment only.
   surface on port 9001; there is no AWS SDK in the browser and no
   cross-origin call from the UI.
 - S3 authentication: AWS Signature V4 on port 9000.
+- Failed-auth IP ban (opt-in, off by default): a public client IP with too
+  many `401`/`403` responses on port 9000 within a short window is refused
+  with `403 AccessDenied` for a fixed period. Loopback, private, link-local,
+  CGNAT and unparseable addresses are never banned, so a misconfigured
+  trusted-proxy setup cannot ban the proxy and take the service down. Both
+  tables are capped, so a botnet minting source IPs cannot exhaust memory.
 - CORS is configured per bucket as an S3 subresource (`PUT/GET/DELETE
   /:bucket?cors`). There is no global, user-editable origin allowlist;
   buckets with no configuration reject cross-origin browser requests.

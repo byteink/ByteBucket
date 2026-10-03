@@ -13,6 +13,10 @@ import (
 // override, registered for GET/PUT/DELETE below.
 const rateLimitConfigPath = "/config/ratelimit"
 
+// ipBanConfigPath is the admin API subpath for the runtime failed-auth ban
+// override on the storage surface, registered for GET/PUT/DELETE below.
+const ipBanConfigPath = "/config/ipban"
+
 // syncWritesConfigPath is the admin API subpath for the object-write durability
 // (fsync) toggle, registered for GET/PUT below.
 const syncWritesConfigPath = "/config/sync"
@@ -107,6 +111,9 @@ func NewAdminRouter(rlCtrl *middleware.RateLimitController) *gin.Engine {
 		api.GET(rateLimitConfigPath, handlers.GetRateLimitHandler)
 		api.PUT(rateLimitConfigPath, handlers.PutRateLimitHandler)
 		api.DELETE(rateLimitConfigPath, handlers.DeleteRateLimitHandler)
+		api.GET(ipBanConfigPath, handlers.GetIPBanHandler)
+		api.PUT(ipBanConfigPath, handlers.PutIPBanHandler)
+		api.DELETE(ipBanConfigPath, handlers.DeleteIPBanHandler)
 		api.GET(syncWritesConfigPath, handlers.GetSyncWritesHandler)
 		api.PUT(syncWritesConfigPath, handlers.PutSyncWritesHandler)
 		api.POST("/users", handlers.CreateUserHandler)

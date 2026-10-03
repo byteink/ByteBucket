@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"sync/atomic"
+
+	"ByteBucket/internal/storage"
 
 	"github.com/gin-gonic/gin"
 )
@@ -28,4 +31,14 @@ func SetPublicBaseURL(v string) {
 func GetConfigHandler(c *gin.Context) {
 	v, _ := publicBaseURL.Load().(string)
 	c.JSON(http.StatusOK, gin.H{"publicBaseURL": v})
+}
+
+// putConfigJSON encodes v and persists it under key in the config bucket. One
+// error covers both steps, so a settings handler has a single failure branch.
+func putConfigJSON(key string, v any) error {
+	blob, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return storage.PutConfigValue(key, blob)
 }

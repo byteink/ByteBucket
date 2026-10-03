@@ -37,6 +37,36 @@ test.describe('settings', () => {
     await expect(page.getByText(startOn ? /Durable writes enabled/ : /Durable writes disabled/)).toBeVisible();
   });
 
+  test('failed-auth ban validates inline and round-trips', async ({ page }) => {
+    // The volume is fresh per run, so the ban starts off with no override.
+    const ban = section(page, 'Failed-auth ban');
+    const enabled = page.getByLabel('Ban IPs after repeated auth failures');
+    const maxFailures = page.getByLabel('Max failures');
+    const save = ban.getByRole('button', { name: 'Save' });
+
+    await expect(enabled).not.toBeChecked();
+    await expect(maxFailures).toHaveValue('20');
+    await expect(page.getByLabel('Window (seconds)')).toHaveValue('60');
+    await expect(page.getByLabel('Ban duration (seconds)')).toHaveValue('900');
+
+    await maxFailures.fill('0');
+    await expect(ban.getByRole('alert')).toHaveText('Max failures must be a whole number from 1 to 10000.');
+    await expect(save).toBeDisabled();
+
+    await maxFailures.fill('5');
+    await expect(ban.getByRole('alert')).toHaveCount(0);
+    await enabled.click();
+    await save.click();
+    await expect(ban.getByRole('status')).toHaveText('Runtime override');
+    await expect(enabled).toBeChecked();
+
+    // Reset restores the environment baseline so later specs see the default.
+    await ban.getByRole('button', { name: 'Reset to environment' }).click();
+    await expect(ban.getByRole('status')).toHaveText('Environment values');
+    await expect(enabled).not.toBeChecked();
+    await expect(maxFailures).toHaveValue('20');
+  });
+
   test('metrics retention saves and reports the new window', async ({ page }) => {
     const retention = section(page, 'Metrics retention');
     const days = page.getByLabel('Retention (days)');

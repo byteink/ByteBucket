@@ -242,27 +242,7 @@ func parseLogLevel(s string) slog.Level {
 // is unit-testable with a cancellable context — main() itself is not easily
 // exercised under `go test`.
 func run(ctx context.Context) error {
-	if err := ensureDirectoriesExist(); err != nil {
-		return err
-	}
-
-	encKey, err := loadEncryptionKey()
-	if err != nil {
-		return err
-	}
-	storage.SetEncryptionKey(encKey)
-
-	if err := storage.InitUserStore("/data/users.db"); err != nil {
-		return err
-	}
-
-	// The unified event log (control-plane audit + data-plane access) lives in
-	// its own file so the access firehose never threatens the auth store.
-	if err := storage.InitEventStore("/data/logs.db"); err != nil {
-		return err
-	}
-
-	if err := bootstrapSuperUser(); err != nil {
+	if err := initStores(); err != nil {
 		return err
 	}
 
@@ -299,12 +279,57 @@ func run(ctx context.Context) error {
 	slog.Info("request-sample retention", "days", retDays)
 	go sampler.Run(ctx, requestSampleInterval, middleware.S3RequestOutcomes, handlers.RequestRetentionDays)
 
-	// Data-plane access log: OFF by default. ACCESS_LOG_ENABLED seeds the master
-	// switch; MAX_EVENTS/MAX_AGE_DAYS seed the retention caps over the built-in
-	// defaults. A persisted runtime override (admin settings UI) wins and
-	// survives restarts. The flusher drains the buffered events into logs.db in
-	// batches off the request path; it stops when ctx cancels, draining the last
-	// partial batch first.
+	if err := initAccessLog(ctx); err != nil {
+		return err
+	}
+
+	if err := initTrustedProxy(); err != nil {
+		return err
+	}
+
+	rlCtrl, err := initRateLimit()
+	if err != nil {
+		return err
+	}
+	banCtrl, err := initIPBan()
+	if err != nil {
+		return err
+	}
+
+	storageSrv := newServer(":9000", withBodyLimit(router.NewStorageRouter(rlCtrl, banCtrl), storageBodyLimit))
+	adminSrv := newServer(":9001", withBodyLimit(router.NewAdminRouter(rlCtrl), adminBodyLimit))
+	return serve(ctx, storageSrv, adminSrv)
+}
+
+// initStores prepares /data, the encryption key, both BoltDB stores and the
+// first-boot super user. The unified event log (control-plane audit +
+// data-plane access) lives in its own file so the access firehose never
+// threatens the auth store.
+func initStores() error {
+	if err := ensureDirectoriesExist(); err != nil {
+		return err
+	}
+	encKey, err := loadEncryptionKey()
+	if err != nil {
+		return err
+	}
+	storage.SetEncryptionKey(encKey)
+	if err := storage.InitUserStore("/data/users.db"); err != nil {
+		return err
+	}
+	if err := storage.InitEventStore("/data/logs.db"); err != nil {
+		return err
+	}
+	return bootstrapSuperUser()
+}
+
+// initAccessLog wires the data-plane access log: OFF by default.
+// ACCESS_LOG_ENABLED seeds the master switch; MAX_EVENTS/MAX_AGE_DAYS seed the
+// retention caps over the built-in defaults. A persisted runtime override
+// (admin settings UI) wins and survives restarts. The flusher drains the
+// buffered events into logs.db in batches off the request path; it stops when
+// ctx cancels, draining the last partial batch first.
+func initAccessLog(ctx context.Context) error {
 	storage.SetAccessLogEnabled(parseBoolEnv("ACCESS_LOG_ENABLED"))
 	storage.SetAccessLogMaxEvents(parseIntEnvDefault("ACCESS_LOG_MAX_EVENTS", storage.AccessLogMaxEvents()))
 	storage.SetAccessLogMaxAge(time.Duration(parseIntEnvDefault("ACCESS_LOG_MAX_AGE_DAYS",
@@ -316,40 +341,85 @@ func run(ctx context.Context) error {
 	slog.Info("data-plane access log", "enabled", accessCfg.Enabled,
 		"max_events", accessCfg.MaxEvents, "max_age_days", accessCfg.MaxAgeDays)
 	go storage.RunEventFlusher(ctx, eventFlushInterval, eventFlushMaxBatch)
+	return nil
+}
 
-	// Trusted-proxy client-IP resolution is server-wide infra shared by the rate
-	// limiter, access log and request log, so they all agree on who the client
-	// is. Seed the env baseline, then let any persisted admin override win (it
-	// survives restarts). Empty by default: trust no header, key on the peer.
+// initTrustedProxy seeds client-IP resolution, server-wide infra shared by the
+// rate limiter, ban, access log and request log so they all agree on who the
+// client is. The env baseline is applied first, then any persisted admin
+// override wins (it survives restarts). Empty by default: trust no header,
+// key on the peer.
+func initTrustedProxy() error {
 	storage.SetTrustedProxy(loadTrustedProxyConfig())
 	tpCfg, err := handlers.InitTrustedProxyFromStore()
 	if err != nil {
 		return err
 	}
 	slog.Info("trusted proxy", "headers", tpCfg.Headers, "use_leftmost_ip", tpCfg.UseLeftmostIP)
+	return nil
+}
 
-	// Request rate limiting is opt-in and OFF by default; the environment
-	// seeds a baseline (see loadRateLimitConfig for the env contract). The
-	// controller is shared by both surfaces and is always installed — disabled
-	// just means it short-circuits — so an admin can enable or retune it at
-	// runtime via the admin API without a restart.
+// initRateLimit builds the request rate limiter. It is opt-in and OFF by
+// default; the environment seeds a baseline (see loadRateLimitConfig). The
+// controller is shared by both surfaces and is always installed (disabled
+// just means it short-circuits) so an admin can enable or retune it at
+// runtime. A persisted override wins over the environment baseline and
+// survives restarts; it is applied before the servers accept traffic.
+func initRateLimit() (*middleware.RateLimitController, error) {
 	rlCfg := loadRateLimitConfig()
 	rlCtrl := middleware.NewRateLimitController(rlCfg)
 	handlers.SetRateLimitController(rlCtrl, rlCfg)
-	// A persisted runtime override wins over the environment baseline and
-	// survives restarts; apply it before the servers accept traffic.
 	eff, err := handlers.InitRateLimitFromStore()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if eff.Enabled {
 		slog.Info("request rate limiting enabled",
 			"rps", eff.RPS, "burst", eff.Burst)
 	}
+	return rlCtrl, nil
+}
 
-	storageSrv := newServer(":9000", withBodyLimit(router.NewStorageRouter(rlCtrl), storageBodyLimit))
-	adminSrv := newServer(":9001", withBodyLimit(router.NewAdminRouter(rlCtrl), adminBodyLimit))
-	return serve(ctx, storageSrv, adminSrv)
+// initIPBan builds the failed-auth ban for the storage surface, following
+// initRateLimit: env baseline (see loadIPBanConfig), always installed, and a
+// persisted override applied before the servers accept traffic.
+func initIPBan() (*middleware.IPBanController, error) {
+	cfg := loadIPBanConfig()
+	ctrl := middleware.NewIPBanController(cfg)
+	handlers.SetIPBanController(ctrl, cfg)
+	eff, err := handlers.InitIPBanFromStore()
+	if err != nil {
+		return nil, err
+	}
+	if eff.Enabled {
+		slog.Info("failed-auth ip ban enabled", "max_failures", eff.MaxFailures,
+			"window_seconds", eff.WindowSeconds, "ban_seconds", eff.BanSeconds)
+	}
+	return ctrl, nil
+}
+
+// loadIPBanConfig resolves the IP_BAN_* environment variables over the
+// built-in defaults. Off by default:
+//
+//   - IP_BAN_ENABLED         (bool, default false) master switch.
+//   - IP_BAN_MAX_FAILURES    (int, default 20) 401/403 responses that trigger a ban.
+//   - IP_BAN_WINDOW_SECONDS  (int, default 60) window the failures must fall in.
+//   - IP_BAN_SECONDS         (int, default 900) how long a ban lasts.
+//
+// An out-of-range or malformed value is logged and replaced by its default
+// rather than aborting startup, matching loadRateLimitConfig.
+func loadIPBanConfig() middleware.IPBanConfig {
+	d := middleware.DefaultIPBanConfig()
+	cfg := middleware.IPBanConfig{
+		Enabled:       parseBoolEnv("IP_BAN_ENABLED"),
+		MaxFailures:   parseIntEnvDefault("IP_BAN_MAX_FAILURES", d.MaxFailures),
+		WindowSeconds: parseIntEnvDefault("IP_BAN_WINDOW_SECONDS", d.WindowSeconds),
+		BanSeconds:    parseIntEnvDefault("IP_BAN_SECONDS", d.BanSeconds),
+	}
+	if err := cfg.Validate(); err != nil {
+		slog.Warn(malformedEnvMsg, "key", "IP_BAN_*", "err", err.Error())
+	}
+	return cfg.Normalized()
 }
 
 // loadRateLimitConfig resolves the RATE_LIMIT_* environment variables. It
