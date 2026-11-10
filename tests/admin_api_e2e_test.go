@@ -4,13 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
+	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 // adminJSON sends an authenticated admin-API request and returns the status and
@@ -273,4 +278,180 @@ func aclBucketsFor(t *testing.T, listBody []byte, accessKeyID string) []string {
 		return out
 	}
 	return nil
+}
+
+func TestE2E_BucketScopedObjectLifecycle(t *testing.T) {
+	bucket := uniqueBucket("scoped-media")
+	const object = "profile/image.png"
+	admin := createS3Client(adminCreds.AccessKeyID, adminCreds.SecretAccessKey)
+	ctx := t.Context()
+	if _, err := admin.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.DeleteObject(context.Background(), &s3.DeleteObjectInput{Bucket: aws.String(bucket), Key: aws.String(object)})
+		_, _ = admin.DeleteBucket(context.Background(), &s3.DeleteBucketInput{Bucket: aws.String(bucket)})
+	})
+
+	ak, sk := createManagedUser(t, `[{"effect":"Allow","buckets":["`+bucket+`"],"actions":["s3:PutObject","s3:GetObject","s3:DeleteObject","s3:ListBucket"]}]`)
+	t.Cleanup(func() { _, _ = adminJSON(t, http.MethodDelete, "/api/users/"+ak, "") })
+	client := createS3Client(ak, sk)
+	testScopedObjectLifecycle(t, client, bucket, object, ak, sk)
+	testScopedMultipartLifecycle(t, client, bucket, object)
+
+	_, err := client.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucket)})
+	requireScopedAccessDenied(t, err)
+	_, err = client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(uniqueBucket("outside-media")), Key: aws.String(object), Body: strings.NewReader("fixture")})
+	requireScopedAccessDenied(t, err)
+}
+
+func testScopedObjectLifecycle(t *testing.T, client *s3.Client, bucket, object, ak, sk string) {
+	t.Helper()
+	ctx := t.Context()
+	const payload = "scoped upload"
+	if _, err := client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(object), Body: strings.NewReader(payload)}); err != nil {
+		t.Fatalf("scoped upload: %v", err)
+	}
+	testScopedObjectReads(t, client, bucket, object, payload)
+	testScopedPrefixList(t, bucket, object, ak, sk)
+	testScopedPresignedRead(t, bucket, object, payload)
+	if _, err := client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(bucket), Key: aws.String(object)}); err != nil {
+		t.Fatalf("scoped delete: %v", err)
+	}
+	if _, err := client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(bucket), Key: aws.String("profile")}); err != nil {
+		t.Fatalf("scoped directory marker cleanup: %v", err)
+	}
+}
+
+func testScopedPresignedRead(t *testing.T, bucket, object, payload string) {
+	t.Helper()
+	ak, sk := createManagedUser(t, `[{"effect":"Allow","buckets":["`+bucket+`"],"actions":["s3:GetObject"]}]`)
+	userPath := "/api/users/" + ak
+	t.Cleanup(func() { _, _ = adminJSON(t, http.MethodDelete, userPath, "") })
+	client := s3.NewPresignClient(createS3Client(ak, sk))
+	request, err := client.PresignGetObject(t.Context(), &s3.GetObjectInput{
+		Bucket: aws.String(bucket), Key: aws.String(object),
+	})
+	if err != nil {
+		t.Fatalf("presign scoped read: %v", err)
+	}
+
+	download := func(wantStatus int) []byte {
+		resp, err := fetchPresigned(request.URL, request.SignedHeader)
+		if err != nil {
+			t.Fatalf("fetch scoped download: %T", err)
+		}
+		body := readAllClose(t, resp)
+		if resp.StatusCode != wantStatus {
+			t.Fatalf("scoped download: HTTP %d, want %d", resp.StatusCode, wantStatus)
+		}
+		return body
+	}
+	if body := download(http.StatusOK); string(body) != payload {
+		t.Fatalf("scoped download returned %q, want %q", body, payload)
+	}
+
+	if status, _ := adminJSON(t, http.MethodPut, userPath,
+		`{"acl":[{"effect":"Allow","buckets":["`+bucket+`"],"actions":["s3:ListBucket"]}]}`); status != http.StatusOK {
+		t.Fatalf("revoke scoped object read: HTTP %d", status)
+	}
+	download(http.StatusForbidden)
+}
+
+func testScopedObjectReads(t *testing.T, client *s3.Client, bucket, object, payload string) {
+	t.Helper()
+	ctx := t.Context()
+	if _, err := client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(object)}); err != nil {
+		t.Fatalf("scoped metadata: %v", err)
+	}
+	result, err := client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(object)})
+	if err != nil {
+		t.Fatalf("scoped download: %v", err)
+	}
+	body, err := io.ReadAll(result.Body)
+	if closeErr := result.Body.Close(); closeErr != nil {
+		t.Errorf("close scoped download: %v", closeErr)
+	}
+	if err != nil || string(body) != payload {
+		t.Fatalf("download body = %q, error = %v", body, err)
+	}
+	list, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{Bucket: aws.String(bucket)})
+	if err != nil || len(list.Contents) != 1 || aws.ToString(list.Contents[0].Key) != object {
+		t.Fatalf("scoped list: %v, error = %v", list, err)
+	}
+}
+
+func testScopedPrefixList(t *testing.T, bucket, object, ak, sk string) {
+	t.Helper()
+	// PocketBase uses this path when it removes all files belonging to a record.
+	req := buildHeaderSigned(t, storageURL, sigV4Request{
+		method: http.MethodGet, path: "/" + bucket + "/",
+		query:     url.Values{"list-type": {"2"}, "prefix": {"profile/"}},
+		accessKey: ak, secret: sk,
+	})
+	resp, err := http.DefaultClient.Do(req.WithContext(t.Context()))
+	if err != nil {
+		t.Fatalf("scoped prefix list: %v", err)
+	}
+	body := readAllClose(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("scoped prefix list: HTTP %d", resp.StatusCode)
+	}
+	var list struct {
+		Contents []struct{ Key string }
+	}
+	if err := xml.Unmarshal(body, &list); err != nil {
+		t.Fatalf("decode scoped prefix list: %v", err)
+	}
+	if len(list.Contents) != 1 || list.Contents[0].Key != object {
+		t.Fatalf("scoped prefix list returned %v, want %q", list.Contents, object)
+	}
+}
+
+func testScopedMultipartLifecycle(t *testing.T, client *s3.Client, bucket, object string) {
+	t.Helper()
+	ctx := t.Context()
+	upload, err := client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(bucket), Key: aws.String(object),
+	})
+	if err != nil {
+		t.Fatalf("scoped multipart create: %v", err)
+	}
+	part, err := client.UploadPart(ctx, &s3.UploadPartInput{
+		Bucket: aws.String(bucket), Key: aws.String(object), UploadId: upload.UploadId,
+		PartNumber: aws.Int32(1), Body: strings.NewReader("scoped multipart"),
+	})
+	if err != nil {
+		t.Fatalf("scoped multipart part: %v", err)
+	}
+	if _, err := client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket: aws.String(bucket), Key: aws.String(object), UploadId: upload.UploadId,
+		MultipartUpload: &s3types.CompletedMultipartUpload{
+			Parts: []s3types.CompletedPart{{ETag: part.ETag, PartNumber: aws.Int32(1)}},
+		},
+	}); err != nil {
+		t.Fatalf("scoped multipart complete: %v", err)
+	}
+	if _, err := client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(bucket), Key: aws.String(object)}); err != nil {
+		t.Fatalf("scoped multipart delete: %v", err)
+	}
+	upload, err = client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(bucket), Key: aws.String(object),
+	})
+	if err != nil {
+		t.Fatalf("scoped multipart create before abort: %v", err)
+	}
+	if _, err := client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+		Bucket: aws.String(bucket), Key: aws.String(object), UploadId: upload.UploadId,
+	}); err != nil {
+		t.Fatalf("scoped multipart abort: %v", err)
+	}
+}
+
+func requireScopedAccessDenied(t *testing.T, err error) {
+	t.Helper()
+	var response *smithyhttp.ResponseError
+	if !errors.As(err, &response) || response.HTTPStatusCode() != http.StatusForbidden {
+		t.Fatalf("expected HTTP 403 AccessDenied, got %v", err)
+	}
 }

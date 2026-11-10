@@ -587,3 +587,74 @@ func TestAdminAuth_ContextCarriesUser(t *testing.T) {
 
 // keep unused imports pulled in
 var _ = io.Discard
+
+func TestHeaderAuthBucketScopedObjectActions(t *testing.T) {
+	setupStorage(t)
+
+	r := gin.New()
+	r.Use(AuthMiddleware)
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodPost} {
+		r.Handle(method, "/:bucket", func(c *gin.Context) { c.Status(http.StatusOK) })
+		r.Handle(method, "/:bucket/*objectKey", func(c *gin.Context) { c.Status(http.StatusOK) })
+	}
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		action string
+		header string
+		want   int
+	}{
+		{"upload", http.MethodPut, "/allowed/image.png", "s3:PutObject", "", 200},
+		{"download", http.MethodGet, "/allowed/image.png", "s3:GetObject", "", 200},
+		{"metadata", http.MethodHead, "/allowed/image.png", "s3:GetObject", "", 200},
+		{"list", http.MethodGet, "/allowed", "s3:ListBucket", "", 200},
+		{"delete object", http.MethodDelete, "/allowed/image.png", "s3:DeleteObject", "", 200},
+		{"multipart start", http.MethodPost, "/allowed/image.png?uploads=", "s3:PutObject", "", 200},
+		{"multipart ACL retains the existing management grant", http.MethodPost, "/allowed/image.png?uploads=", "s3:PutObject", "x-amz-acl", 403},
+		{"multipart part", http.MethodPut, "/allowed/image.png?partNumber=1&uploadId=fixture", "s3:PutObject", "", 200},
+		{"multipart abort", http.MethodDelete, "/allowed/image.png?uploadId=fixture", "s3:DeleteObject", "", 200},
+		{"bucket metadata compatibility", http.MethodHead, "/allowed", "s3:PutObject", "", 200},
+		{"list needs its own grant", http.MethodGet, "/allowed", "s3:GetObject", "", 403},
+		{"object metadata needs read", http.MethodHead, "/allowed/image.png", "s3:ListBucket", "", 403},
+		{"create bucket requires management grant", http.MethodPut, "/allowed", "s3:PutObject", "", 403},
+		{"trailing slash still creates bucket", http.MethodPut, "/allowed/", "s3:PutObject", "", 403},
+		{"delete bucket requires management grant", http.MethodDelete, "/allowed", "s3:DeleteObject", "", 403},
+		{"different bucket", http.MethodPut, "/other/image.png", "s3:PutObject", "", 403},
+		{"ACL change requires its existing grant", http.MethodPut, "/allowed/image.png?acl=", "s3:PutObject", "", 403},
+		{"tag mutation requires its existing grant", http.MethodPut, "/allowed/image.png?tagging=", "s3:PutObject", "", 403},
+		{"tag deletion requires its existing grant", http.MethodDelete, "/allowed/image.png?tagging=", "s3:DeleteObject", "", 403},
+		{"copy retains its existing grant", http.MethodPut, "/allowed/image.png", "s3:PutObject", "x-amz-copy-source", 403},
+		{"canned ACL retains its existing grant", http.MethodPut, "/allowed/image.png", "s3:PutObject", "x-amz-acl", 403},
+		{"batch delete requires delete grant", http.MethodPost, "/allowed?delete=", "s3:PutObject", "", 403},
+		{"batch delete accepts delete grant", http.MethodPost, "/allowed?delete=", "s3:DeleteObject", "", 200},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			accessKey := fmt.Sprintf("scoped-%d", i)
+			secret := "test-bucket-scoped-secret"
+			encrypted, err := storage.Encrypt(secret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := storage.CreateUser(&storage.User{
+				AccessKeyID:     accessKey,
+				EncryptedSecret: encrypted,
+				ACL:             []storage.ACLRule{{Effect: "Allow", Buckets: []string{"allowed"}, Actions: []string{tc.action}}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(tc.method, tc.path, nil)
+			if tc.header != "" {
+				request.Header.Set(tc.header, "fixture")
+			}
+			signRequest(t, request, nil, accessKey, secret, "us-east-1", "s3", time.Now(), "")
+			response := httptest.NewRecorder()
+			r.ServeHTTP(response, request)
+			if response.Code != tc.want {
+				t.Fatalf("got %d, want %d", response.Code, tc.want)
+			}
+		})
+	}
+}

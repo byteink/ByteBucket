@@ -280,9 +280,11 @@ func processHeaderAuth(c *gin.Context, authHeader string) {
 	if !validateTimestamp(c, amzDate) {
 		return
 	}
+	authorizeSignedRequest(c, user)
+}
 
-	// Check if the user is allowed to perform the action
-	if !isUserAllowed(user, c.Request.Method, c.Param("bucket")) {
+func authorizeSignedRequest(c *gin.Context, user *storage.User) {
+	if !isUserAllowed(c, user) {
 		abortWithError(c, http.StatusForbidden, "AccessDenied", "User does not have permission to perform this action")
 		return
 	}
@@ -295,14 +297,16 @@ func processHeaderAuth(c *gin.Context, authHeader string) {
 	c.Next()
 }
 
-func isUserAllowed(user *storage.User, method, bucket string) bool {
-	action := getActionFromMethod(method, bucket)
+func isUserAllowed(c *gin.Context, user *storage.User) bool {
+	action := requestAction(c)
 	if action == "" {
 		return false
 	}
+	bucket := c.Param("bucket")
+	allowBucketHead := c.Request.Method == http.MethodHead && action == "s3:ListBucket"
 	for _, rule := range user.ACL {
 		if strings.EqualFold(rule.Effect, "Allow") {
-			if isBucketAllowed(rule.Buckets, bucket) && isActionAllowed(rule.Actions, action) {
+			if isBucketAllowed(rule.Buckets, bucket) && isActionAllowed(rule.Actions, action, allowBucketHead) {
 				return true
 			}
 		}
@@ -310,39 +314,81 @@ func isUserAllowed(user *storage.User, method, bucket string) bool {
 	return false
 }
 
-func getActionFromMethod(method, bucket string) string {
-	switch method {
-	case http.MethodGet:
-		if bucket == "" {
-			return "s3:ListBuckets"
-		}
+func requestAction(c *gin.Context) string {
+	key := c.Param("objectKey")
+	if key != "" && key != "/" {
+		return objectAction(c)
+	}
+	return bucketAction(c)
+}
+
+func objectAction(c *gin.Context) string {
+	switch c.Request.Method {
+	case http.MethodGet, http.MethodHead:
 		return "s3:GetObject"
-	case http.MethodHead:
-		if bucket == "" {
-			return "s3:ListBuckets"
-		}
-		// Treat HEAD bucket as a list-bucket permission for SDK compatibility.
-		return "s3:ListBucket"
 	case http.MethodPut:
-		if bucket != "" && !strings.Contains(bucket, "/") {
-			return "s3:CreateBucket"
-		}
-		return "s3:PutObject"
+		return objectPutAction(c)
 	case http.MethodDelete:
-		if bucket != "" && !strings.Contains(bucket, "/") {
+		if c.Request.URL.Query().Has("tagging") {
 			return "s3:DeleteBucket"
 		}
 		return "s3:DeleteObject"
 	case http.MethodPost:
-		// POST on an S3 object path is reserved for multipart initiate
-		// (?uploads) and complete (?uploadId). Both are writes, so reuse the
-		// same permission as a single-PUT upload; this keeps ACLs that grant
-		// s3:PutObject automatically covering multipart without needing a
-		// separate action string.
+		if c.Request.URL.Query().Has("uploads") && c.GetHeader("x-amz-acl") != "" {
+			return "s3:CreateBucket"
+		}
 		return "s3:PutObject"
 	default:
 		return ""
 	}
+}
+
+func objectPutAction(c *gin.Context) string {
+	// Copy and metadata changes retain their existing grants so an object
+	// writer does not gain permission to copy or change visibility.
+	q := c.Request.URL.Query()
+	if q.Has("acl") || q.Has("tagging") ||
+		c.GetHeader("x-amz-copy-source") != "" || c.GetHeader("x-amz-acl") != "" {
+		return "s3:CreateBucket"
+	}
+	return "s3:PutObject"
+}
+
+func bucketAction(c *gin.Context) string {
+	bucket := c.Param("bucket")
+	switch c.Request.Method {
+	case http.MethodGet, http.MethodHead:
+		return bucketReadAction(c)
+	case http.MethodPut:
+		if bucket == "" {
+			return "s3:PutObject"
+		}
+		return "s3:CreateBucket"
+	case http.MethodDelete:
+		if bucket == "" {
+			return "s3:DeleteObject"
+		}
+		return "s3:DeleteBucket"
+	case http.MethodPost:
+		q := c.Request.URL.Query()
+		if q.Has("delete") && !q.Has("cors") && !q.Has("acl") {
+			return "s3:DeleteObject"
+		}
+		return "s3:PutObject"
+	default:
+		return ""
+	}
+}
+
+func bucketReadAction(c *gin.Context) string {
+	if c.Param("bucket") == "" {
+		return "s3:ListBuckets"
+	}
+	q := c.Request.URL.Query()
+	if c.Request.Method == http.MethodGet && (q.Has("cors") || q.Has("acl") || q.Has("uploads")) {
+		return "s3:GetObject"
+	}
+	return "s3:ListBucket"
 }
 
 func isBucketAllowed(buckets []string, bucket string) bool {
@@ -354,15 +400,15 @@ func isBucketAllowed(buckets []string, bucket string) bool {
 	return false
 }
 
-func isActionAllowed(actions []string, action string) bool {
+func isActionAllowed(actions []string, action string, allowBucketHead bool) bool {
 	// Direct match (including wildcard).
 	for _, a := range actions {
 		if a == "*" || a == action {
 			return true
 		}
 	}
-	// Any object-level permission implies ListBucket so HeadBucket works.
-	if action == "s3:ListBucket" {
+	// A scoped object credential can check bucket existence without listing its contents.
+	if allowBucketHead {
 		for _, a := range actions {
 			if a == "s3:GetObject" || a == "s3:PutObject" || a == "s3:DeleteObject" {
 				return true
@@ -486,11 +532,7 @@ func processPresignedAuth(c *gin.Context) {
 	if !validateTimestamp(c, amzDate) {
 		return
 	}
-	// Publish authenticated identity for downstream handlers. See header
-	// auth path for rationale.
-	c.Set("user", user)
-	c.Set("authMethod", "sigv4")
-	c.Next()
+	authorizeSignedRequest(c, user)
 }
 
 // buildCanonicalRequest constructs the canonical request string according to AWS SigV4 specifications.

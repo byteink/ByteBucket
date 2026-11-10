@@ -39,8 +39,9 @@ func RegisterStorageRoutes(g gin.IRouter) {
 	// per-bucket CORS subresource handlers when "?cors" is present; this
 	// preserves the S3 wire shape where subresources live on the query
 	// string rather than as distinct path segments.
+	bucketGET := dispatchBucketSubresource(handlers.ListObjectsHandler, http.MethodGet)
 	g.PUT(bucketPath, v, dispatchBucketSubresource(handlers.CreateBucketHandler, http.MethodPut))
-	g.GET(bucketPath, v, dispatchBucketSubresource(handlers.ListObjectsHandler, http.MethodGet))
+	g.GET(bucketPath, v, bucketGET)
 	g.DELETE(bucketPath, v, dispatchBucketSubresource(handlers.DeleteBucketHandler, http.MethodDelete))
 	// POST /:bucket exists only for the ?delete batch subresource; any other
 	// bucket-level POST is unsupported and the default handler returns 405.
@@ -51,7 +52,14 @@ func RegisterStorageRoutes(g gin.IRouter) {
 	// for wildcard paths, an empty object key (trailing slash on /:bucket/)
 	// has historically been treated as a bucket-level operation; keep that.
 	g.PUT("/:bucket/*objectKey", v, dispatchObjectPUT)
-	g.GET("/:bucket/*objectKey", v, dispatchObjectGET)
+	g.GET("/:bucket/*objectKey", v, func(c *gin.Context) {
+		// S3 clients can sign the bucket path with a trailing slash.
+		if c.Param("objectKey") == "/" {
+			bucketGET(c)
+			return
+		}
+		dispatchObjectGET(c)
+	})
 	g.DELETE("/:bucket/*objectKey", v, dispatchObjectDELETE)
 	g.POST("/:bucket/*objectKey", v, dispatchObjectPOST)
 	g.HEAD("/:bucket/*objectKey", v, func(c *gin.Context) {
