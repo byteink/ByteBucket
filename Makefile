@@ -52,19 +52,30 @@ e2e-web:
 # a throwaway container so no local trivy install is required. We gate on
 # HIGH and CRITICAL findings only — Go std lib advisories often land as
 # MEDIUM and would force a release-block on every weekly DB refresh.
-# The image-config check also flags running as root or missing HEALTHCHECK
-# so any future regression in Dockerfile hardening trips this target.
+#
+# The trivy image is pinned rather than :latest so the gate is reproducible:
+# a floating tag silently keeps whatever version the host already cached.
+#
+# Two different flags cover two different things, and conflating them is how
+# the Dockerfile checks went unrun. --scanners misconfig reads IaC files in
+# the image filesystem; --image-config-scanners misconfig reads the image
+# config (the Dockerfile). Only the latter catches DS-0002, "image user
+# should not be root" (HIGH) — that is the regression this target exists to
+# block. The remaining image-config rules, DS-0026 (no HEALTHCHECK) among
+# them, are below HIGH and so stay informational.
 IMAGE_TAG ?= bytebucket-scan:local
+TRIVY_VERSION ?= 0.76.2
 image-scan:
 	docker build -f docker/Dockerfile -t $(IMAGE_TAG) .
 	docker run --rm \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v $(HOME)/.cache/trivy:/root/.cache/trivy \
-		aquasec/trivy:latest image \
+		aquasec/trivy:$(TRIVY_VERSION) image \
 		--severity HIGH,CRITICAL \
 		--exit-code 1 \
 		--ignore-unfixed \
 		--scanners vuln,misconfig,secret \
+		--image-config-scanners misconfig \
 		$(IMAGE_TAG)
 
 clean:
