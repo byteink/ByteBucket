@@ -25,10 +25,9 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: build the Go binary with the bundled UI embedded via go:embed.
-# Pin the exact patch (not the floating 1.26-alpine) so the stdlib that ships
-# in the binary is deterministic — 1.26.8 carries the stdlib fixes the image
-# scan gates on (CVE-2026-42504, CVE-2026-33818, CVE-2026-56853..56862).
-FROM golang:1.26.8-alpine AS builder
+# Pin the patch release so the shipped stdlib includes the security fixes
+# verified by the image scan.
+FROM golang:1.26.11-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
