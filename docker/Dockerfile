@@ -27,7 +27,7 @@ RUN npm run build
 # Stage 2: build the Go binary with the bundled UI embedded via go:embed.
 # Pin the patch release so the shipped stdlib includes the security fixes
 # verified by the image scan.
-FROM golang:1.26.11-alpine AS builder
+FROM golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
