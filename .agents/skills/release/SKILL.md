@@ -76,6 +76,8 @@ If `gh run watch` is available, prefer that — it streams the run and returns n
 
 ### 5. Summarise
 
+Inspect the published release body. A generated changelog link alone is not sufficient: use the verified tag diff to describe the concrete changes, operator and compatibility notes, and validation actually performed. Update the existing release with `gh release edit --notes-file`, then read it back to verify the published notes.
+
 On success, report:
 - Tag name
 - Image reference that will be pulled by consumers (e.g. `ghcr.io/byteink/bytebucket:vX.Y.Z` and `:latest`)
