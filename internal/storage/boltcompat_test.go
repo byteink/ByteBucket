@@ -39,13 +39,19 @@ func copyFile(t *testing.T, src, dst string) {
 	if err != nil {
 		t.Fatalf("open src %s: %v", src, err)
 	}
-	defer in.Close()
+	defer func() {
+		if err := in.Close(); err != nil {
+			t.Errorf("close src %s: %v", src, err)
+		}
+	}()
 	out, err := os.Create(dst)
 	if err != nil {
 		t.Fatalf("create dst %s: %v", dst, err)
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
+		if closeErr := out.Close(); closeErr != nil {
+			t.Errorf("close dst %s: %v", dst, closeErr)
+		}
 		t.Fatalf("copy %s -> %s: %v", src, dst, err)
 	}
 	if err := out.Close(); err != nil {

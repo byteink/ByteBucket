@@ -18,7 +18,11 @@ func scrapeMetrics(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("failed to scrape /metrics: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("close metrics response: %v", err)
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 from /metrics, got %d", resp.StatusCode)
 	}
@@ -92,8 +96,7 @@ func TestMetricsCounterIncrementsAcrossAdminRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("admin request failed: %v", err)
 	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
+	readAllClose(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 from /api/s3/, got %d", resp.StatusCode)
 	}

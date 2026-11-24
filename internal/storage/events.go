@@ -9,6 +9,7 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	boltErrors "go.etcd.io/bbolt/errors"
 )
 
 // The unified event log lives in its own BoltDB file (logs.db), separate from
@@ -160,7 +161,7 @@ func AppendEvent(e Event) error {
 	return eventDB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketFor(e.Category)))
 		if b == nil {
-			return bolt.ErrBucketNotFound
+			return boltErrors.ErrBucketNotFound
 		}
 		if err := putEvent(b, e); err != nil {
 			return err
@@ -205,7 +206,7 @@ func flushEvents(batch []Event) error {
 	return eventDB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(eventDataBucket))
 		if b == nil {
-			return bolt.ErrBucketNotFound
+			return boltErrors.ErrBucketNotFound
 		}
 		for _, e := range batch {
 			if err := putEvent(b, e); err != nil {

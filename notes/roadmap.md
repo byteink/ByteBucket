@@ -290,3 +290,5 @@ Existing pages: Login, Buckets, Objects, ObjectDetail, BucketCORS, Users, Settin
   eviction + janitor (~17 MiB measured worst case). Storage surface only; admin
   keeps its own lockout. Saving the setting lifts all bans; no per-IP unban list
   or banned-IP viewer yet. Settings UI section + probe group (probes_ipban.sh).
+- 2026-11-24: Fixed unbounded request buffering and concurrent conditional writes;
+  verified with unit, container, and security tests.

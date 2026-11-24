@@ -8,10 +8,9 @@ import (
 // objectLockStripes is the fixed number of mutexes guarding object writes.
 // A fixed array bounds memory (no per-key allocation that a hostile key space
 // could grow without limit) at the cost of occasional false sharing between
-// unrelated keys that hash to the same stripe. The lock is held for the whole
-// write (stream + rename + sidecar), so two same-stripe writes serialize; this
-// is acceptable because concurrent writes to one key are last-writer-wins
-// anyway and 256 stripes make cross-key collisions rare.
+// unrelated keys that hash to the same stripe. Request bodies are staged before
+// locking; only the predicate check and object/sidecar commit serialize, so a
+// slow upload cannot block an unrelated key sharing its stripe.
 const objectLockStripes = 256
 
 // objectLocks serializes mutations of a single object so its data file and

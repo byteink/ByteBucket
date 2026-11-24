@@ -1,11 +1,7 @@
 package handlers
 
 import (
-	"crypto/md5"
-	"encoding/base64"
-	"encoding/binary"
 	"errors"
-	"hash/crc32"
 	"io"
 	"net/http"
 	"os"
@@ -16,9 +12,8 @@ import (
 	"ByteBucket/internal/middleware"
 	"ByteBucket/internal/storage"
 
-	"github.com/goccy/go-json"
-
 	"github.com/gin-gonic/gin"
+	"github.com/goccy/go-json"
 )
 
 // UploadObjectHandler handles object uploads by reading the raw request body.
@@ -49,6 +44,17 @@ func UploadObjectHandler(c *gin.Context) {
 		return
 	}
 
+	staged, err := stageObjectWrite(dstPath, c.Request.Body)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "InternalError", "Error saving object")
+		return
+	}
+	defer staged.cleanup()
+
+	// A predicate and its commit share the mutation lock, while a slow
+	// upload stages its body without blocking other requests on the stripe.
+	defer lockObjectPath(dstPath)()
+
 	// Optimistic-concurrency preconditions: If-None-Match:* (create-only) and
 	// If-Match:<etag> (overwrite-only-if-unchanged) are evaluated against the
 	// current on-disk object before we commit any bytes.
@@ -61,7 +67,7 @@ func UploadObjectHandler(c *gin.Context) {
 		return
 	}
 
-	etag, written, err := finalizeObjectWrite(bucketName, dstPath, c.Request.Body, metadata)
+	etag, written, err := staged.commit(bucketName, dstPath, metadata)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "InternalError", "Error saving object")
 		return
@@ -115,97 +121,16 @@ func contentTypeOrOctet(c *gin.Context) string {
 // destination cannot truncate its own input mid-read. meta must already carry
 // Content-Type and any acl entry. Returns the ETag and bytes written.
 func finalizeObjectWrite(bucketName, dstPath string, src io.Reader, meta map[string]string) (string, int64, error) {
+	staged, err := stageObjectWrite(dstPath, src)
+	if err != nil {
+		return "", 0, err
+	}
+	defer staged.cleanup()
+
 	// Serialize with any concurrent write/delete of the same key so the object
 	// file and its .meta sidecar are committed as a consistent pair.
 	defer lockObjectPath(dstPath)()
-
-	dir := filepath.Dir(dstPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", 0, err
-	}
-
-	etag, crc32b64, written, err := streamToObject(dir, dstPath, src)
-	if err != nil {
-		return "", 0, err
-	}
-
-	meta["x-amz-checksum-crc32"] = crc32b64
-	meta[etagMetaKey] = etag
-	meta["Content-Length"] = strconv.FormatInt(written, 10)
-
-	metadataJSON, err := json.Marshal(meta)
-	if err != nil {
-		return "", 0, err
-	}
-	if err := os.WriteFile(dstPath+".meta", metadataJSON, 0644); err != nil {
-		return "", 0, err
-	}
-
-	// Best-effort gauge delta — a trendline, not an authoritative size report.
-	middleware.ObjectsBytesTotal.WithLabelValues(bucketName).Add(float64(written))
-	return etag, written, nil
-}
-
-// streamToObject writes src to a temp file in dir, computing the S3 ETag and
-// CRC32 in a single pass, optionally fsyncs the data, then atomically renames
-// it into dstPath (and fsyncs dir when durable). Returns the ETag, the base64
-// CRC32, and the byte count.
-func streamToObject(dir, dstPath string, src io.Reader) (string, string, int64, error) {
-	tmp, err := os.CreateTemp(dir, ".upload-*")
-	if err != nil {
-		return "", "", 0, err
-	}
-	tmpName := tmp.Name()
-	committed := false
-	defer func() {
-		if !committed {
-			_ = os.Remove(tmpName)
-		}
-	}()
-
-	// The MD5 and CRC32 hashers share the MultiWriter so the S3 ETag and the
-	// checksum are computed in one pass without re-reading from disk.
-	crcHasher := crc32.NewIEEE()
-	md5Hasher := md5.New()
-	written, err := io.Copy(io.MultiWriter(tmp, crcHasher, md5Hasher), src)
-	if err != nil {
-		_ = tmp.Close()
-		return "", "", 0, err
-	}
-	// Flush data to stable storage before the rename when durability is on, so
-	// an acknowledged write survives power loss; skipped when the operator has
-	// traded durability for throughput.
-	durable := syncWritesEnabled()
-	if durable {
-		if err := tmp.Sync(); err != nil {
-			_ = tmp.Close()
-			return "", "", 0, err
-		}
-	}
-	// Match the 0644 an os.Create would have produced; CreateTemp uses 0600.
-	if err := tmp.Chmod(0644); err != nil {
-		_ = tmp.Close()
-		return "", "", 0, err
-	}
-	if err := tmp.Close(); err != nil {
-		return "", "", 0, err
-	}
-	if err := os.Rename(tmpName, dstPath); err != nil {
-		return "", "", 0, err
-	}
-	committed = true
-
-	// fsync the parent directory so the rename itself is durable: without it a
-	// crash can lose the directory entry even though the file data was synced.
-	if durable {
-		if err := fsyncDir(dir); err != nil {
-			return "", "", 0, err
-		}
-	}
-
-	checksumBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(checksumBytes, crcHasher.Sum32())
-	return formatETag(md5Hasher), base64.StdEncoding.EncodeToString(checksumBytes), written, nil
+	return staged.commit(bucketName, dstPath, meta)
 }
 
 // fsyncDir flushes a directory entry to stable storage so a rename into it is

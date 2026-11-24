@@ -454,6 +454,7 @@ Everything lives under `/data`:
 - **Backups.** Snapshot the whole `/data` volume. Object bytes + their sidecar must travel together. BoltDB's single file is consistent on snapshot thanks to its write-ahead design.
 - **Corruption recovery.** If a `.meta` sidecar is missing, the ETag is recomputed lazily on next read. Stored objects are never mutated after PUT, so bitrot detection is a matter of periodically verifying MD5 against the stored ETag.
 - **Deletion** removes the object and its sidecar, then collapses empty parent directories.
+- Hashed SigV4 request bodies are verified with bounded memory using temporary disk space under `/data/uploads` and discarded automatically; signed uploads need temporary disk space in addition to the final object.
 
 ---
 

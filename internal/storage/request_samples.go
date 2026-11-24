@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 
 	bolt "go.etcd.io/bbolt"
+	boltErrors "go.etcd.io/bbolt/errors"
 )
 
 // requestSamplesBucket holds per-minute deltas of S3 request outcomes, keyed by
@@ -48,7 +49,7 @@ func PutRequestSample(s RequestSample) error {
 	return userDB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(requestSamplesBucket))
 		if b == nil {
-			return bolt.ErrBucketNotFound
+			return boltErrors.ErrBucketNotFound
 		}
 		return b.Put(encodeSampleKey(s.MinuteUnix), encodeSampleValue(s))
 	})

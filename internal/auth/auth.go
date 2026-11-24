@@ -1,13 +1,11 @@
 package auth
 
 import (
-	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -170,123 +168,16 @@ func objectACL(bucket, key string) (string, error) {
 	return storage.EffectiveObjectACL(bucket, objectPath)
 }
 
-// processHeaderAuth handles signature validation when an Authorization header is provided.
-func processHeaderAuth(c *gin.Context, authHeader string) {
-	const prefix = "AWS4-HMAC-SHA256 "
-	authParamsStr := strings.TrimPrefix(authHeader, prefix)
-	authParams := make(map[string]string)
-	for _, param := range strings.Split(authParamsStr, ",") {
-		kv := strings.SplitN(strings.TrimSpace(param), "=", 2)
-		if len(kv) == 2 {
-			authParams[kv[0]] = kv[1]
-		}
+func authorizeSignedRequest(c *gin.Context, user *storage.User) {
+	if publishSignedIdentity(c, user) {
+		c.Next()
 	}
-	credential, ok := authParams["Credential"]
-	if !ok {
-		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Missing Credential in Authorization header")
-		return
-	}
-	signedHeaders, ok := authParams["SignedHeaders"]
-	if !ok {
-		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Missing SignedHeaders in Authorization header")
-		return
-	}
-	signatureProvided, ok := authParams["Signature"]
-	if !ok {
-		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Missing Signature in Authorization header")
-		return
-	}
-
-	credParts := strings.Split(credential, "/")
-	if len(credParts) != 5 {
-		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Invalid Credential format")
-		return
-	}
-	accessKey := credParts[0]
-	date := credParts[1] // YYYYMMDD
-	region := credParts[2]
-	service := credParts[3]
-	terminal := credParts[4]
-	if terminal != "aws4_request" {
-		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Invalid Credential terminal")
-		return
-	}
-
-	amzDate := c.GetHeader("X-Amz-Date")
-	if amzDate == "" {
-		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Missing X-Amz-Date header")
-		return
-	}
-	if len(amzDate) < 8 || amzDate[:8] != date {
-		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Date mismatch in X-Amz-Date header")
-		return
-	}
-	payloadHash := c.GetHeader("X-Amz-Content-Sha256")
-	if payloadHash == "" {
-		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "Missing X-Amz-Content-Sha256 header")
-		return
-	}
-
-	// Verify body hash matches the claimed X-Amz-Content-Sha256, unless the
-	// client signalled that verification is intentionally skipped
-	// (UNSIGNED-PAYLOAD or chunked STREAMING-*). Without this check, an
-	// attacker with a valid signature for hash H could submit arbitrary
-	// bytes instead, bypassing integrity.
-	if payloadHash != "UNSIGNED-PAYLOAD" && !strings.HasPrefix(payloadHash, "STREAMING-") {
-		buf, readErr := io.ReadAll(c.Request.Body)
-		if readErr != nil {
-			abortWithError(c, http.StatusBadRequest, "IncompleteBody", "Failed to read request body")
-			return
-		}
-		sum := sha256.Sum256(buf)
-		if hex.EncodeToString(sum[:]) != payloadHash {
-			abortWithError(c, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "The provided 'x-amz-content-sha256' header does not match what was computed")
-			return
-		}
-		// Restore body for downstream handlers.
-		c.Request.Body = io.NopCloser(bytes.NewReader(buf))
-	}
-
-	canonicalRequest, err := buildCanonicalRequest(c, signedHeaders, payloadHash, nil)
-	if err != nil {
-		abortWithError(c, http.StatusInternalServerError, "InternalError", "Error building canonical request")
-		return
-	}
-	hashedCanonicalRequest := hashSHA256(canonicalRequest)
-	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", date, region, service)
-	stringToSign := fmt.Sprintf("AWS4-HMAC-SHA256\n%s\n%s\n%s", amzDate, credentialScope, hashedCanonicalRequest)
-
-	user, err := storage.GetUser(accessKey)
-	if err != nil {
-		abortWithError(c, http.StatusUnauthorized, "AccessDenied", "User not found")
-		return
-	}
-	secret, err := storage.Decrypt(user.EncryptedSecret)
-	if err != nil {
-		abortWithError(c, http.StatusInternalServerError, "InternalError", "Error decrypting secret")
-		return
-	}
-
-	signingKey := getSigningKey("AWS4"+secret, date, region, service)
-	expectedSig := hmacSHA256([]byte(stringToSign), signingKey)
-	providedSig, err := hex.DecodeString(signatureProvided)
-	// Compare raw bytes via hmac.Equal to avoid timing leaks. A malformed
-	// hex signature decodes to nil and will not equal a real HMAC.
-	if err != nil || !hmac.Equal(expectedSig, providedSig) {
-		abortWithError(c, http.StatusUnauthorized, "SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided")
-		return
-	}
-
-	if !validateTimestamp(c, amzDate) {
-		return
-	}
-	authorizeSignedRequest(c, user)
 }
 
-func authorizeSignedRequest(c *gin.Context, user *storage.User) {
+func publishSignedIdentity(c *gin.Context, user *storage.User) bool {
 	if !isUserAllowed(c, user) {
 		abortWithError(c, http.StatusForbidden, "AccessDenied", "User does not have permission to perform this action")
-		return
+		return false
 	}
 
 	// Publish authenticated identity for downstream handlers. Without this,
@@ -294,7 +185,7 @@ func authorizeSignedRequest(c *gin.Context, user *storage.User) {
 	// signature parsing and opening a window for drift between auth and authz.
 	c.Set("user", user)
 	c.Set("authMethod", "sigv4")
-	c.Next()
+	return true
 }
 
 func isUserAllowed(c *gin.Context, user *storage.User) bool {

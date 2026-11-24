@@ -103,20 +103,8 @@ func reduceXMLToCanned(p *s3AccessControlPolicy) string {
 	return storage.ACLPrivate
 }
 
-// readCannedACL extracts the canned ACL value to persist for a request. The
-// header form ("x-amz-acl") wins over the body, matching S3's documented
-// precedence; an empty header AND empty body returns "private".
-func readCannedACL(c *gin.Context) (string, error) {
-	if hdr := c.GetHeader("x-amz-acl"); hdr != "" {
-		return storage.NormalizeCannedACL(hdr)
-	}
-	// Body parsing is only relevant on the ?acl subresource; PUT-object
-	// requests without an x-amz-acl header inherit the bucket default.
-	return storage.ACLPrivate, nil
-}
-
-// readCannedACLFromAclSubresource is the handler-side companion to readCannedACL
-// for ?acl PUTs: an x-amz-acl header still wins, but if absent we parse the XML
+// readCannedACLFromAclSubresource is for ?acl PUTs: an x-amz-acl header wins,
+// but if absent we parse the XML
 // body for an AccessControlPolicy and reduce it to a canned form. JSON bodies
 // (admin UI) accept {"canned":"private|public-read"} directly.
 func readCannedACLFromAclSubresource(c *gin.Context) (string, error) {

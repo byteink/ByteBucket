@@ -27,6 +27,9 @@ func setupStorage(t *testing.T) (string, string) {
 	gin.SetMode(gin.TestMode)
 
 	dir := t.TempDir()
+	previousUploadsRoot := storage.UploadsRoot
+	storage.UploadsRoot = dir + "/uploads"
+	t.Cleanup(func() { storage.UploadsRoot = previousUploadsRoot })
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)

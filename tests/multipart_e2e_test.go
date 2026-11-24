@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
@@ -340,7 +340,7 @@ func TestE2E_Multipart_TraversalUploadIDContained(t *testing.T) {
 }
 
 // TestE2E_Multipart_AWSSDKCompat is the compatibility gold-standard:
-// use the managed uploader (manager.Uploader.Upload) to push a 15 MiB file
+// use the managed uploader (transfermanager.Client.UploadObject) to push a 15 MiB file
 // — which is larger than the 5 MiB default PartSize, forcing a real
 // multipart sequence (CreateMultipartUpload, UploadPart x N,
 // CompleteMultipartUpload) issued by the SDK. Then verify GET returns the
@@ -368,11 +368,12 @@ func TestE2E_Multipart_AWSSDKCompat(t *testing.T) {
 		payload[i] = byte(i % 251)
 	}
 
-	uploader := manager.NewUploader(client, func(u *manager.Uploader) {
-		u.PartSize = 5 * 1024 * 1024
+	uploader := transfermanager.New(client, func(u *transfermanager.Options) {
+		u.PartSizeBytes = 5 * 1024 * 1024
+		u.MultipartUploadThreshold = 5 * 1024 * 1024
 		u.Concurrency = 3
 	})
-	_, err = uploader.Upload(context.TODO(), &s3.PutObjectInput{
+	_, err = uploader.UploadObject(context.TODO(), &transfermanager.UploadObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 		Body:   bytes.NewReader(payload),

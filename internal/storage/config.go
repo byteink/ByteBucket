@@ -1,6 +1,9 @@
 package storage
 
-import bolt "go.etcd.io/bbolt"
+import (
+	bolt "go.etcd.io/bbolt"
+	boltErrors "go.etcd.io/bbolt/errors"
+)
 
 // configBucket is the BoltDB bucket holding operator settings as opaque blobs
 // keyed by name. Storage stays a dumb key/value store here: it neither parses
@@ -67,7 +70,7 @@ func boltPutConfigValue(key string, val []byte) error {
 	return userDB.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(configBucket))
 		if b == nil {
-			return bolt.ErrBucketNotFound
+			return boltErrors.ErrBucketNotFound
 		}
 		return b.Put([]byte(key), val)
 	})
